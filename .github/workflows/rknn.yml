@@ -11,17 +11,13 @@ name: rknn-convert
 #   * PROVES: fixed-shape ONNX -> fp16 and INT8 .rknn conversion for rk3588, and
 #     simulator-level numeric parity of the identical build graph vs ONNX.
 #   * DOES NOT PROVE: on-board Edge2/RK3588 NPU execution, real-time throughput on
-#     the board, or listening/separation quality. On-board execution requires
-#     RKNN-Toolkit-Lite2 on the Edge2 and remains unverified.
+#     the board, or listening/separation quality. On-board execution is verified
+#     separately from this workflow (see docs/handoff.md and docs/evidence/); a
+#     green conversion run is never evidence of on-board NPU success.
 
 on:
   workflow_dispatch:
   workflow_call:
-  # Iterator trigger: GitHub only exposes workflow_dispatch for workflows that
-  # already exist on the default branch, and this branch must be green before the
-  # lead merges it. Remove once the workflow is on main (dispatch then works).
-  push:
-    branches: [npu/rknn-ci]
 
 permissions:
   contents: read
