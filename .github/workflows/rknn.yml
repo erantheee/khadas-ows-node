@@ -1,0 +1,199 @@
+name: rknn-convert
+
+# RKNN conversion cannot run on the macOS arm64 development machine: official
+# rknn-toolkit2 wheels are published for Linux x86_64/aarch64 only. This job runs
+# the conversion on a GitHub-hosted ubuntu-22.04 x86_64 runner and verifies the
+# identical build graph (rebuilt in-process with the same flags) in RKNN-Toolkit2's
+# *PC simulator* against ONNXRuntime. An exported .rknn cannot be load_rknn()'d on a
+# PC simulator; running the artifact itself needs Edge2 hardware.
+#
+# Evidence scope (do not overstate):
+#   * PROVES: fixed-shape ONNX -> fp16 and INT8 .rknn conversion for rk3588, and
+#     simulator-level numeric parity of the identical build graph vs ONNX.
+#   * DOES NOT PROVE: on-board Edge2/RK3588 NPU execution, real-time throughput on
+#     the board, or listening/separation quality. On-board execution requires
+#     RKNN-Toolkit-Lite2 on the Edge2 and remains unverified.
+
+on:
+  workflow_dispatch:
+  workflow_call:
+  # Iterator trigger: GitHub only exposes workflow_dispatch for workflows that
+  # already exist on the default branch, and this branch must be green before the
+  # lead merges it. Remove once the workflow is on main (dispatch then works).
+  push:
+    branches: [npu/rknn-ci]
+
+permissions:
+  contents: read
+
+jobs:
+  convert:
+    name: RKNN conversion + simulator parity (rk3588, x86_64)
+    runs-on: ubuntu-22.04
+    timeout-minutes: 40
+    env:
+      PYTHONPATH: python
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install RKNN toolchain and ONNX reference runtime
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          # tools/make_calibration.py needs torch.stft, so install the CPU-only wheel.
+          # RKNN-Toolkit2's own torch pin is irrelevant for ONNX conversion, so the
+          # toolkit is installed --no-deps and its remaining dependencies are resolved
+          # from its wheel metadata below (WITHOUT pulling a CUDA torch build).
+          pip install "torch==2.2.0+cpu" --index-url https://download.pytorch.org/whl/cpu
+          pip install --no-deps "rknn-toolkit2==2.5.0"
+          python - <<'PY'
+          import subprocess
+          import sys
+          from importlib.metadata import metadata
+
+          requirements = []
+          for line in metadata("rknn-toolkit2").get_all("Requires-Dist") or []:
+              requirement = line.split(";", 1)[0].strip()
+              if not requirement:
+                  continue
+              name = requirement.split("[", 1)[0].split(" ", 1)[0].lower()
+              if name.startswith("torch"):
+                  continue  # CPU-only torch installed above; not needed for ONNX conversion
+              if name.startswith("opencv-python"):
+                  # headless cv2 avoids libGL requirements on the runner
+                  requirement = requirement.replace("opencv-python", "opencv-python-headless", 1)
+              requirements.append(requirement)
+          print("installing rknn-toolkit2 dependencies:", requirements)
+          subprocess.check_call([sys.executable, "-m", "pip", "install", "--quiet", *requirements])
+          PY
+          python - <<'PY'
+          import importlib.metadata as md
+
+          import numpy
+          import onnx
+          import onnxruntime
+          import rknn.api  # noqa: F401
+          import torch
+
+          print("rknn-toolkit2:", md.version("rknn-toolkit2"))
+          print("onnxruntime:", onnxruntime.__version__)
+          print("onnx:", onnx.__version__)
+          print("torch:", torch.__version__)
+          print("numpy:", numpy.__version__)
+          PY
+
+      - name: Download fixed-shape ONNX from the models-v0 release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts reports
+          gh release download models-v0 \
+            --repo "${GITHUB_REPOSITORY}" \
+            --pattern 'candidate-v0.onnx' \
+            --pattern 'candidate-v0.onnx.data' \
+            --pattern 'SHA256SUMS' \
+            --dir artifacts
+          ls -l artifacts
+
+      - name: Verify ONNX artifact (external data, published hashes, boundary)
+        run: |
+          set -euo pipefail
+          python tools/verify_onnx.py \
+            --onnx artifacts/candidate-v0.onnx \
+            --sha256sums artifacts/SHA256SUMS \
+            --report reports/candidate-v0.onnx.json
+
+      - name: Generate deterministic INT8 calibration set
+        run: |
+          set -euo pipefail
+          python tools/make_calibration.py --output-dir models/calib
+          echo "calibration entries: $(wc -l < models/calib/dataset.txt)"
+
+      - name: Convert fp16 (non-quantised) RKNN
+        run: |
+          set -euo pipefail
+          python tools/convert_rknn.py \
+            --onnx artifacts/candidate-v0.onnx \
+            --output models/candidate-v0.fp.rknn \
+            --no-quant --verbose \
+            --report reports/candidate-v0.fp.convert.json
+
+      - name: Convert INT8 RKNN
+        run: |
+          set -euo pipefail
+          python tools/convert_rknn.py \
+            --onnx artifacts/candidate-v0.onnx \
+            --output models/candidate-v0.int8.rknn \
+            --dataset models/calib/dataset.txt --verbose \
+            --report reports/candidate-v0.int8.convert.json
+
+      - name: Verify fp16 build graph in the simulator against ONNX
+        run: |
+          set -euo pipefail
+          # load_rknn() artifacts cannot run in the PC simulator, so rebuild the same
+          # graph with the same flags in-process and verify that in the simulator.
+          python tools/verify_rknn.py \
+            --onnx artifacts/candidate-v0.onnx \
+            --rknn models/candidate-v0.fp.rknn \
+            --no-quant \
+            --report reports/candidate-v0.fp.parity.json \
+            --summary reports/candidate-v0.fp.summary.md
+          cat reports/candidate-v0.fp.summary.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Verify INT8 build graph in the simulator against ONNX
+        run: |
+          set -euo pipefail
+          python tools/verify_rknn.py \
+            --onnx artifacts/candidate-v0.onnx \
+            --rknn models/candidate-v0.int8.rknn \
+            --dataset models/calib/dataset.txt --quantized \
+            --report reports/candidate-v0.int8.parity.json \
+            --summary reports/candidate-v0.int8.summary.md
+          cat reports/candidate-v0.int8.summary.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Record artifact SHA256SUMS
+        run: |
+          set -euo pipefail
+          sha256sum \
+            models/candidate-v0.fp.rknn \
+            models/candidate-v0.int8.rknn \
+            reports/candidate-v0.fp.convert.json \
+            reports/candidate-v0.int8.convert.json \
+            reports/candidate-v0.fp.parity.json \
+            reports/candidate-v0.int8.parity.json \
+            > reports/SHA256SUMS
+          cat reports/SHA256SUMS
+
+      - name: Write evidence scope to the job summary
+        if: always()
+        run: |
+          {
+            echo "## RKNN conversion evidence scope"
+            echo ""
+            echo "- **Proven by this run:** the fixed-shape ONNX model converts to an fp16 and an INT8 \`.rknn\` for \`rk3588\`; the *identical build graph* (same ONNX, target and quantisation flags, rebuilt in-process) runs in the RKNN-Toolkit2 **PC simulator** and tracks the ONNX reference numerically; the rebuilt export hash is cross-checked against the uploaded artifact."
+            echo "- **Not proven here:** running the exported \`.rknn\` file itself (\`RKNN.load_rknn\` requires a physical target), on-board Edge2/RK3588 NPU execution, real-time throughput on the board, or listening/separation quality. Those require RKNN-Toolkit-Lite2 on the board and remain unverified."
+            echo "- The simulator emulates the compiled graph on the runner CPU; simulator parity is not NPU parity."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: rknn-artifacts
+          if-no-files-found: warn
+          retention-days: 14
+          path: |
+            models/candidate-v0.fp.rknn
+            models/candidate-v0.int8.rknn
+            reports/candidate-v0.fp.convert.json
+            reports/candidate-v0.int8.convert.json
+            reports/candidate-v0.fp.parity.json
+            reports/candidate-v0.int8.parity.json
+            reports/candidate-v0.onnx.json
+            reports/SHA256SUMS
