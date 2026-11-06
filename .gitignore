@@ -28,3 +28,6 @@ docs/listening-material/**/blind-set/
 docs/listening-material/**/stems/
 docs/listening-material/**/render-report.json
 docs/listening-material/**/*.wav
+
+# macOS folder metadata
+.DS_Store
