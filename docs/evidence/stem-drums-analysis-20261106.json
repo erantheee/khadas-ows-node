@@ -1,0 +1,55 @@
+{
+  "schema": 1,
+  "purpose": "Explain the human listening observation 'drums stem sounds weird' with measured evidence",
+  "input": "45 s QQ Music capture (Core Audio process tap); ground truth from MUSDB18-HQ excerpts",
+  "qq_capture_stems": {
+    "unit": "dBFS RMS over the 45 s excerpt; spectral centroid over first 8 s",
+    "mixture": {"rms_dbfs": -11.73, "centroid_hz": 3005, "peak_energy_share": 0.135},
+    "vocals":  {"rms_dbfs": -24.32, "centroid_hz": 2958, "peak_energy_share": 0.370},
+    "drums":   {"rms_dbfs": -45.00, "centroid_hz": 5620, "peak_energy_share": 0.616},
+    "bass":    {"rms_dbfs": -13.22, "centroid_hz": 1103, "peak_energy_share": 0.138},
+    "other":   {"rms_dbfs": -22.47, "centroid_hz": 4115, "peak_energy_share": 0.174},
+    "reading": "the drums stem is ~34 dB below the mixture, centered at 5.6 kHz with 62% of its energy in the top 2% samples: it is mostly faint high-frequency transient leakage, not drums. That is what the listener hears as '怪怪的'."
+  },
+  "musdb_ground_truth": {
+    "method": "3 test excerpts x 40 s; per-stem SDR of mask*mixture estimates vs true stems; 4 s windows",
+    "per_track": [
+      {"track": "Angels In Amplifiers - I'm Alright",
+       "sdr_db": {"vocals": 3.26, "drums": 0.24, "bass": -0.66, "other": 2.42},
+       "est_vs_true_rms_db": {"drums_est": -49.1, "drums_true": -26.0},
+       "mean_mask": {"vocals": 0.176, "drums": 0.159, "bass": 0.127, "other": 0.538}},
+      {"track": "Buitraker - Revo X",
+       "sdr_db": {"vocals": 0.51, "drums": 0.02, "bass": -3.67, "other": 0.58},
+       "est_vs_true_rms_db": {"drums_est": -54.2, "drums_true": -20.4},
+       "mean_mask": {"vocals": 0.237, "drums": 0.208, "bass": 0.157, "other": 0.398}},
+      {"track": "Little Chicago's Finest - My Own",
+       "sdr_db": {"vocals": 1.64, "drums": 0.19, "bass": -8.92, "other": -5.0},
+       "est_vs_true_rms_db": {"drums_est": -50.3, "drums_true": -21.9},
+       "mean_mask": {"vocals": 0.216, "drums": 0.195, "bass": 0.155, "other": 0.434}}
+    ],
+    "reading": "drums SDR ~0 dB (no usable separation) and the drums estimate is 23-34 dB below the true drums; bass is over-allocated (negative SDR = worse than passing the mixture through), other/vocals are weak but positive."
+  },
+  "stem_order_verified": {
+    "method": "4x4 SDR matrix (model output stem index vs ground-truth stem) on one MUSDB excerpt",
+    "matrix_db": {
+      "model0_vocals": {"vocals": 3.26, "drums": -2.47, "bass": -2.86, "other": -0.65},
+      "model1_drums":  {"vocals": 0.13, "drums": 0.24, "bass": 0.04, "other": 0.19},
+      "model2_bass":   {"vocals": -2.64, "drums": -1.08, "bass": -0.66, "other": -1.27},
+      "model3_other":  {"vocals": -0.91, "drums": -3.90, "bass": -4.58, "other": 2.42}
+    },
+    "conclusion": "diagonal is the best match for every row -> (vocals, drums, bass, other) stem order is correct; the drums problem is model quality, not a wiring/order bug."
+  },
+  "checkpoint_training_state": {
+    "checkpoint": "band_split_musdb.pt (550,816 params, BandSplitNet base=128 layers=6)",
+    "epochs_completed": 6,
+    "epochs_planned": 20,
+    "loss_curve": [0.03535, 0.03230, 0.03058, 0.02983, 0.02888, 0.02880],
+    "epoch_2_eval_sdr_db": {"vocals": 1.97, "drums": 2.42, "bass": 3.07, "other": 2.57},
+    "reading": "training stopped after 6 of 20 planned epochs (~14 min/epoch on MPS, loss still decreasing); the quarantine manifest already said 'training completion not independently established'. The drums stem is the weakest because the model is undertrained and capacity is small."
+  },
+  "reference_point": {
+    "industry_precedent_from_legacy_handoff": "Band-SCNet 2.59M params, SDR 7.79 dB, 92 ms real-time; the corrected route was 'train a lightweight model from scratch', not distil htdemucs",
+    "implication": "a 0.55M/6-epoch checkpoint is below the credible quality class; the engineering chain is unaffected but the model is not product-ready"
+  },
+  "not_proven": "no listening acceptance; this file explains the observed drums artifact, it does not judge audio quality"
+}

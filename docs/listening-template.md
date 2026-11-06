@@ -13,7 +13,24 @@ Use the tool (see `docs/edge2-runbook.md` §10):
 .venv/bin/python tools/listening_ab.py --self-test   # machinery check only, not a quality test
 ```
 
-## Session record
+## Session record — 2026-11-06 (first human listening, QQ Music capture)
+
+- Listener observation (verbatim, user): "NPU、CPU其实都还好，分轨可以，但好像鼓分出来的怪怪的"
+- Source material: 45 s live QQ Music capture (Core Audio process tap); named stems in
+  `docs/listening-material/qq-music/stems/`, envelope-modulated sets in
+  `docs/listening-material/qq-music-envelope-{broadband,keyboard,broadband-strong}/`
+- Build: main `d27f1bd` (NPU fp16 rknn sha256 `af92ce83…6a6f`)
+- Observed: CPU and NPU renditions are indistinguishable (measured -66..-70 dB relative
+  difference, as expected); separation is acceptable to the listener overall; the **drums
+  stem sounds abnormal** (measured: -45 dBFS vs -11.7 dBFS mixture, 5.6 kHz centroid,
+  62 % of energy in the top 2 % samples -> mostly faint high-frequency leakage).
+- Root-cause evidence: `docs/evidence/stem-drums-analysis-20261106.json` (drums SDR ~0 dB,
+  drums estimate 23-34 dB below truth, stem order verified correct, checkpoint trained only
+  6 of 20 planned epochs).
+- Status: observation recorded, not a formal pass/fail rating; the user has not yet given a
+  final listening conclusion. No score is recorded.
+
+## Session record template
 
 - Date / listener:
 - Build SHA / model hash (rknn sha256):
