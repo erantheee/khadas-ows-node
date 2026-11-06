@@ -211,6 +211,11 @@ class RknnLiteBackend:
                 f"rknnlite.init_runtime failed with return code {result}; "
                 "check that the Edge2 kernel driver and librknnrt versions match RKNN-Toolkit-Lite2"
             )
+        # Warm the graph once so the first *audio* packet is not charged the one-off
+        # runtime/driver initialisation cost (measured ~0.5-3.5 s on an Edge2, which
+        # would otherwise look like a worker timeout and force a passthrough fallback).
+        warmup = np.zeros((1, MODEL_CHANNELS, FREQ_BINS, MODEL_FRAMES), dtype=np.float32)
+        self.run(warmup)
 
     def run(self, magnitude: np.ndarray) -> np.ndarray:
         payload = np.ascontiguousarray(magnitude, dtype=np.float32)

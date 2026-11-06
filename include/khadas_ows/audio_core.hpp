@@ -70,8 +70,10 @@ public:
     void request_mode(Mode mode);
     void set_model_hash(std::string value);
     Status status() const;
+    /// timeout_ms: 0 = use KHADAS_WORKER_TIMEOUT_MS (default 1500 ms); explicit values are
+    /// honoured as-is (tests pass short timeouts to exercise the timeout path on purpose).
     std::vector<float> process(const PacketHeader& header, const std::vector<float>& input,
-                               int timeout_ms = 1500);
+                               int timeout_ms = 0);
     std::string status_json() const;
     /// Ingests one control-rate evidence frame (dt_ms defaults to the 100 ms control period) and
     /// advances the ported legacy conversation state machine. Returns the new policy output.
@@ -96,6 +98,7 @@ private:
     conversation::Output policy_;
     float applied_gain_ = 1.0f;
     int evidence_ttl_ms_ = 2000;
+    int default_worker_timeout_ms_ = 1500;
     std::chrono::steady_clock::time_point last_evidence_at_{};
     bool has_evidence_ = false;
     std::chrono::steady_clock::time_point started_at_ = std::chrono::steady_clock::now();

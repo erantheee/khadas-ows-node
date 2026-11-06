@@ -20,7 +20,11 @@ namespace {
 
 constexpr std::uint32_t kMagic = 0x4b4f5753; // KOWS
 constexpr int kAcceptPollMs = 50;
-constexpr int kClientTimeoutMs = 1000;
+// Idle timeout for an accepted client connection. It must exceed the largest gap between two
+// packets of one stream: a fixed-shape NPU worker runs a 4.005 s window, so the probe client
+// legitimately sends one 4 s packet every 4 s. 1 s (the original value) tore down such a
+// connection between packets and looked like "unrecoverable stream loss" on the client.
+constexpr int kDefaultClientTimeoutMs = 10000;
 constexpr std::size_t kMaxRequestBytes = 64 * 1024;
 constexpr std::size_t kMaxPacketSamples = 44100 * 2 * 8; // 8 s of stereo 44.1 kHz
 
@@ -96,6 +100,23 @@ bool wait_input(int fd, int timeout_ms) {
         ready = ::poll(&descriptor, 1, timeout_ms);
     } while (ready < 0 && errno == EINTR);
     return ready > 0 && (descriptor.revents & (POLLIN | POLLHUP | POLLERR)) != 0;
+}
+
+int int_from_env(const char* name, int fallback, int low, int high) {
+    const char* raw = std::getenv(name);
+    if (raw == nullptr || *raw == '\0') return fallback;
+    char* end = nullptr;
+    const long value = std::strtol(raw, &end, 10);
+    if (end == raw || *end != '\0' || value < low || value > high) return fallback;
+    return static_cast<int>(value);
+}
+
+int client_timeout_from_env() {
+    return int_from_env("KHADAS_CLIENT_TIMEOUT_MS", kDefaultClientTimeoutMs, 100, 600000);
+}
+
+int worker_timeout_from_env() {
+    return int_from_env("KHADAS_WORKER_TIMEOUT_MS", 1500, 1, 60000);
 }
 
 int evidence_ttl_from_env() {
@@ -397,7 +418,8 @@ AudioCore::AudioCore(std::size_t capacity_samples, WorkerPorts worker_ports,
                      int evidence_ttl_ms)
     : ring_(capacity_samples),
       worker_ports_(worker_ports),
-      evidence_ttl_ms_(evidence_ttl_ms > 0 ? evidence_ttl_ms : evidence_ttl_from_env()) {
+      evidence_ttl_ms_(evidence_ttl_ms > 0 ? evidence_ttl_ms : evidence_ttl_from_env()),
+      default_worker_timeout_ms_(worker_timeout_from_env()) {
     status_.evidence_ttl_ms = evidence_ttl_ms_;
 }
 
@@ -520,6 +542,7 @@ void AudioCore::apply_duck_gain_locked(std::vector<float>& block) {
 
 std::vector<float> AudioCore::process(const PacketHeader& header, const std::vector<float>& input,
                                       int timeout_ms) {
+    if (timeout_ms <= 0) timeout_ms = default_worker_timeout_ms_;
     const auto expected = static_cast<std::size_t>(header.frames) * header.channels;
     if (header.magic != kMagic || header.schema != 1 || header.channels != 2 ||
         header.sample_rate != 44100 || header.frames == 0 || input.size() != expected) {
@@ -627,12 +650,13 @@ std::string AudioCore::status_json() const {
 int run_audio_server(AudioCore& core, std::uint16_t port, std::atomic<bool>* stop) {
     const int server = listen_on(port);
     if (server < 0) return 1;
+    const int client_timeout_ms = client_timeout_from_env();
     std::vector<unsigned char> wire; // reused across packets/clients: no per-packet allocation
     while (stop == nullptr || !stop->load()) {
         if (!wait_input(server, kAcceptPollMs)) continue;
         const int client = ::accept(server, nullptr, nullptr);
         if (client < 0) continue;
-        set_io_timeout(client, kClientTimeoutMs);
+        set_io_timeout(client, client_timeout_ms);
         set_no_delay(client);
         PacketHeader header{};
         while (read_all(client, &header, sizeof(header))) {
@@ -657,11 +681,12 @@ int run_audio_server(AudioCore& core, std::uint16_t port, std::atomic<bool>* sto
 int run_http_server(AudioCore& core, std::uint16_t port, std::atomic<bool>* stop) {
     const int server = listen_on(port);
     if (server < 0) return 1;
+    const int client_timeout_ms = client_timeout_from_env();
     while (stop == nullptr || !stop->load()) {
         if (!wait_input(server, kAcceptPollMs)) continue;
         const int client = ::accept(server, nullptr, nullptr);
         if (client < 0) continue;
-        set_io_timeout(client, kClientTimeoutMs);
+        set_io_timeout(client, client_timeout_ms);
         handle_http_client(core, client);
         ::close(client);
     }
