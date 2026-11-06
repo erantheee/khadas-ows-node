@@ -13,3 +13,8 @@ __pycache__/
 *.raw
 /models/*.manifest.json
 
+
+# Generated engineering artifacts (fixtures, calibration sets, local builds)
+build-*/
+models/calib/
+*.log
