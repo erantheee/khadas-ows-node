@@ -2,6 +2,8 @@
 
 ## Current state
 
+- Private repository: `https://github.com/erantheee/khadas-ows-node` (`main`).
+- GitHub Actions run `42181954927` passed on 2026-11-06: CMake/CTest and Python/Pytest green.
 - Local C++ build passes 2/2 CTest tests.
 - Python model/network tests pass 2/2.
 - CPU end-to-end smoke passed on a 2-second 44.1 kHz stereo fixture; observed RTF was about 0.36 on the development Mac. This is not an Edge2 result or listening acceptance.
