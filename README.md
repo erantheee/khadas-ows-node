@@ -21,7 +21,7 @@ Engineering success and listening acceptance are deliberately separate. Read
 | ONNX → RKNN conversion (x86_64 CI, RKNN-Toolkit2 2.5.0) | PASS — fp16 and INT8 `.rknn` produced; simulator parity vs ONNX: fp16 cos 0.99999998 / max abs 4.2e-4, INT8 cos 0.99993 |
 | **Edge2 on-board NPU execution** | **PASS — `actual_mode=npu` on a physical Edge2**; fp16 model ~0.97 s per 4.005 s window (RTF ≈ 0.24), NPU core 0 measured 71–74 % busy during inference |
 | 60 s real-time network stream in `npu` mode | PASS — 15/15 chunks, p95 RTT 1.92 s, 0 deadline misses, 0 fallbacks, 0 reconnects |
-| 30-minute board soak (realtime input, NPU mode) | see [`docs/soak-report-npu-20261106.json`](docs/soak-report-npu-20261106.json) and “Honest boundaries” below |
+| 30-minute board soak (realtime input, NPU mode) | **PASS** — 450/450 chunks, 1800.0 s audio, realtime ratio 1.0009, RTT p50 1.60 s / p95 1.91 s / p99 2.20 s, 0 deadline misses, 0 fallbacks, 0 reconnects, `actual_mode=npu` on 1806/1806 status samples, max SoC temp 53.6 °C, 0 throttle events → [`docs/soak-report-npu-20261106.json`](docs/soak-report-npu-20261106.json) |
 | Human blind listening (passthrough / CPU / NPU) | **NOT RUN — belongs to the human listener**; tooling and blinded material prepared (`tools/listening_ab.py`, `docs/listening-material/`) |
 
 ## Architecture

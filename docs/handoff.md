@@ -31,7 +31,7 @@ is unchanged and poor (≈0 dB SDR); the listening conclusion is still the human
 | 5 | ONNX → RKNN conversion works on a supported x86_64 host | CI [run 42186101812](https://github.com/erantheee/khadas-ows-node/actions/runs/42186101812) green (5m01s), fp16 + INT8 artifacts, simulator parity → `docs/rknn-verification.md`, `docs/evidence/rknn/` |
 | 6 | **Edge2 on-board NPU execution** | `actual_mode=npu`; fp16 ≈ 0.97 s per 4.005 s window (RTF ≈ 0.24), NPU core 0 71–74 % busy; INT8 ≈ 4.3 s (RTF ≈ 1.07, not real-time) → `docs/evidence/board-npu-bench.json` |
 | 7 | Real-time network stream in `npu` mode | 60 s, 15/15 chunks, p95 1.92 s, 0 misses/fallbacks/reconnects → `docs/evidence/stream-npu-60s.json` |
-| 8 | 30-minute soak in `npu` mode | `docs/soak-report-npu-20261106.json` (final run; an earlier aborted attempt is kept as `docs/evidence/soak-attempt1-aborted.json` and explained in `docs/rknn-verification.md` §5) |
+| 8 | 30-minute soak in `npu` mode | **PASS** — 450/450 chunks, 1800.0 s audio, realtime ratio 1.0009, RTT p50 1.60 s / p95 1.91 s / p99 2.20 s, 0 misses/fallbacks/reconnects, `actual_mode=npu` 1806/1806 samples, SoC max 53.6 °C, 0 throttle events → `docs/soak-report-npu-20261106.json` (an earlier aborted attempt is kept as `docs/evidence/soak-attempt1-aborted.json` and explained in `docs/rknn-verification.md` §5) |
 | 9 | Human blind listening | **NOT RUN.** Material and tooling prepared: `docs/listening-material/`, `tools/listening_ab.py` |
 
 ## Room state at handoff (board)

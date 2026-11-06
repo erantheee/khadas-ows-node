@@ -81,9 +81,12 @@ reported as a negative engineering result rather than hidden.
 - 60 s stream, `npu` mode, 4 s packets: 15/15 chunks, p50 1.69 s / p95 1.92 s RTT,
   0 deadline misses, 0 reconnects, `actual_mode=npu`, `fallbacks_delta=0`
   ([`evidence/stream-npu-60s.json`](evidence/stream-npu-60s.json)).
-- 30-minute soak: see the report named in the handoff/README (final run) and
-  [`evidence/soak-attempt1-aborted.json`](evidence/soak-attempt1-aborted.json) for a first
-  aborted attempt. The first attempt was killed by the soak monitor after 73 s because the
+- 30-minute soak (**PASS**): 450/450 packets, 1800.0 s of audio in 1806 s wall
+  (realtime ratio 1.0009), RTT p50 1.60 s / p95 1.91 s / p99 2.20 s / max 2.52 s,
+  0 deadline misses, 0 reconnects, `fallbacks_delta=0`, `actual_mode=npu` on all 1806 status
+  samples, server RTF p50 0.289 / p95 0.305 / max 0.371, 31 thermal samples with SoC max
+  53.6 °C and **0 throttle events** — report `docs/soak-report-npu-20261106.json`.
+  A first attempt is kept as [`evidence/soak-attempt1-aborted.json`](evidence/soak-attempt1-aborted.json). The first attempt was killed by the soak monitor after 73 s because the
   default “no successful chunk for 5 s” threshold is calibrated for 100 ms packets, not for
   the 4 s NPU packet cadence, and because heavy host-side work (PyTorch parity/CPU rendering)
   ran concurrently on the Mac. The second run uses `--max-unrecovered-seconds 15` and an
