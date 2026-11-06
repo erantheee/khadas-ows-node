@@ -18,3 +18,6 @@ __pycache__/
 build-*/
 models/calib/
 *.log
+
+# local tool build cache (Swift recorder etc.)
+.cache/

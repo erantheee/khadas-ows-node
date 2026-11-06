@@ -19,6 +19,45 @@ The current material uses the deterministic engineering fixture from
 the pipeline, but it is **not music** — for a real listening judgement, re-render the three
 files from a track you care about (see “Rendering your own material” below).
 
+## Real-music sets prepared with this session's pipeline
+
+Real music is what matters for listening; the synthetic fixture only exercised the plumbing.
+Generated on 2026-11-06 (all WAVs git-ignored, regenerate any time):
+
+| set | source | how it was made |
+| --- | --- | --- |
+| `music/angels-in-amplifiers-im-alright/` | MUSDB18-HQ test track (real music, 40 s excerpt) | `render_modes.py` → passthrough / CPU / NPU |
+| `music/buitraker-revo-x/` | MUSDB18-HQ test track (40 s excerpt) | same |
+| `music/little-chicagos-finest-my-own/` | MUSDB18-HQ test track (40 s excerpt) | same |
+| `qq-music/` | **live capture of QQ Music playback** (45 s, Core Audio process tap) | `tools/listen_qqmusic.sh` |
+
+Each set has `renditions/` (named files) and `blind-set/` (loudness-matched, blind labels
+`A/B/C` + sealed `key.json` + `presentation.txt` + scores template). Quick listen:
+
+```bash
+cd docs/listening-material/qq-music/blind-set
+afplay A.wav            # then B.wav, C.wav  (level-matched, mapping hidden)
+cat key.json            # only AFTER you have judged
+```
+
+What the three renditions are: `passthrough` = the exact excerpt the node forwards,
+`cpu`/`npu` = the worker's separation output (the extracted vocal stem, peak-matched per
+packet by the engineering-probe convention). So the blind test tells you about leakage,
+pumping and artifacts of the separation output against the original mix — not about a
+"music enhancement" product.
+
+### Capture your own music app (macOS)
+
+```bash
+# capture what QQ Music is playing, render all modes, build the blind set
+sh tools/listen_qqmusic.sh                    # 45 s; starts capture and waits for playback
+sh tools/listen_qqmusic.sh --seconds 60 --bundle com.netease.163music --name netease
+```
+
+Direct pieces: `tools/capture_qqmusic.py` (tap capture, `--launch` opens the app),
+`tools/render_modes.py` (three renditions of one excerpt),
+`tools/prepare_blind.py` (level matching + blinded A/B/C without an interactive terminal).
+
 ## Running the blind test (interactive terminal required)
 
 ```bash

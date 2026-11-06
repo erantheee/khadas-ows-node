@@ -125,11 +125,15 @@ tools/deploy_edge2.sh --host khadas@<board-ip> \
 
 Full board steps, failure semantics and debugging commands: [`docs/edge2-runbook.md`](docs/edge2-runbook.md).
 
-## Human listening (only the human decides)
+## Listening with real music (only the human decides)
 
-`tools/listening_ab.py` loudness-matches (BS.1770) the three renditions, randomises blind
-labels, helps playback and records scores; it never scores quality itself. Prepared material
-and instructions: [`docs/listening-material/README.md`](docs/listening-material/README.md).
+Real-music listening is prepared by `tools/render_modes.py` (passthrough / CPU / NPU
+renditions of one excerpt), `tools/prepare_blind.py` (BS.1770 level matching + blinded
+A/B/C with a sealed key, no interactive terminal needed) and
+`tools/listen_qqmusic.sh` (capture what QQ Music is playing with a Core Audio process tap,
+then render and blind it). `tools/listening_ab.py` is the interactive protocol recorder.
+Instructions and the prepared real-music sets: [`docs/listening-material/README.md`](docs/listening-material/README.md).
+The tooling never scores quality itself.
 The candidate model's measured SDR is around 0 dB (no meaningful separation), so a
 “deployment success, quality not accepted” conclusion is the expected outcome.
 
