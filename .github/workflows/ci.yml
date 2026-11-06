@@ -1,8 +1,17 @@
 name: ci
 on: [push, pull_request]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v5
       - run: cmake -S . -B build && cmake --build build --parallel && ctest --test-dir build --output-on-failure
@@ -10,3 +19,18 @@ jobs:
         with: {python-version: '3.11'}
       - run: pip install torch --index-url https://download.pytorch.org/whl/cpu
       - run: pip install -e '.[test]' && pytest -q
+
+  sanitizers:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - name: Build and test with ASan/UBSan
+        env:
+          ASAN_OPTIONS: detect_leaks=1:abort_on_error=1
+          UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
+        run: |
+          cmake -S . -B build-san -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer -g"
+          cmake --build build-san --parallel
+          ctest --test-dir build-san --output-on-failure
