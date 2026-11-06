@@ -33,7 +33,9 @@ RKNN-Toolkit2 publishes Linux x86_64/aarch64 wheels only, so conversion runs in
 
 Green run: **https://github.com/erantheee/khadas-ows-node/actions/runs/42186101812** — success
 in 5m01s on 2026-11-06, including ONNX artifact verification, deterministic calibration
-generation, both conversions and both simulator parity checks.
+generation, both conversions and both simulator parity checks. After the branch was merged,
+the workflow was re-dispatched from `main` (`gh workflow run rknn.yml --ref main`) and run
+**42190639965** was green as well, confirming the pipeline works from the default branch.
 
 | artifact | size | sha256 | build | simulator parity vs ONNXRuntime |
 | --- | --- | --- | --- | --- |
