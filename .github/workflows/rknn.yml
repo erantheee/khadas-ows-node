@@ -3,11 +3,13 @@ name: rknn-convert
 # RKNN conversion cannot run on the macOS arm64 development machine: official
 # rknn-toolkit2 wheels are published for Linux x86_64/aarch64 only. This job runs
 # the conversion on a GitHub-hosted ubuntu-22.04 x86_64 runner and verifies the
-# generated artifacts in RKNN-Toolkit2's *PC simulator* against ONNXRuntime.
+# identical build graph (rebuilt in-process with the same flags) in RKNN-Toolkit2's
+# *PC simulator* against ONNXRuntime. An exported .rknn cannot be load_rknn()'d on a
+# PC simulator; running the artifact itself needs Edge2 hardware.
 #
 # Evidence scope (do not overstate):
 #   * PROVES: fixed-shape ONNX -> fp16 and INT8 .rknn conversion for rk3588, and
-#     simulator-level numeric parity with the ONNX reference.
+#     simulator-level numeric parity of the identical build graph vs ONNX.
 #   * DOES NOT PROVE: on-board Edge2/RK3588 NPU execution, real-time throughput on
 #     the board, or listening/separation quality. On-board execution requires
 #     RKNN-Toolkit-Lite2 on the Edge2 and remains unverified.
@@ -132,23 +134,26 @@ jobs:
             --dataset models/calib/dataset.txt --verbose \
             --report reports/candidate-v0.int8.convert.json
 
-      - name: Verify fp16 RKNN in the simulator against ONNX
+      - name: Verify fp16 build graph in the simulator against ONNX
         run: |
           set -euo pipefail
+          # load_rknn() artifacts cannot run in the PC simulator, so rebuild the same
+          # graph with the same flags in-process and verify that in the simulator.
           python tools/verify_rknn.py \
-            --rknn models/candidate-v0.fp.rknn \
             --onnx artifacts/candidate-v0.onnx \
+            --rknn models/candidate-v0.fp.rknn \
+            --no-quant \
             --report reports/candidate-v0.fp.parity.json \
             --summary reports/candidate-v0.fp.summary.md
           cat reports/candidate-v0.fp.summary.md >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Verify INT8 RKNN in the simulator against ONNX
+      - name: Verify INT8 build graph in the simulator against ONNX
         run: |
           set -euo pipefail
           python tools/verify_rknn.py \
-            --rknn models/candidate-v0.int8.rknn \
             --onnx artifacts/candidate-v0.onnx \
-            --quantized \
+            --rknn models/candidate-v0.int8.rknn \
+            --dataset models/calib/dataset.txt --quantized \
             --report reports/candidate-v0.int8.parity.json \
             --summary reports/candidate-v0.int8.summary.md
           cat reports/candidate-v0.int8.summary.md >> "$GITHUB_STEP_SUMMARY"
@@ -172,8 +177,8 @@ jobs:
           {
             echo "## RKNN conversion evidence scope"
             echo ""
-            echo "- **Proven by this run:** the fixed-shape ONNX model converts to an fp16 and an INT8 \`.rknn\` for \`rk3588\`, and both artifacts load and run in the RKNN-Toolkit2 **PC simulator**, tracking the ONNX reference numerically."
-            echo "- **Not proven here:** on-board Edge2/RK3588 NPU execution, real-time throughput on the board, or listening/separation quality. Those require RKNN-Toolkit-Lite2 on the board and remain unverified."
+            echo "- **Proven by this run:** the fixed-shape ONNX model converts to an fp16 and an INT8 \`.rknn\` for \`rk3588\`; the *identical build graph* (same ONNX, target and quantisation flags, rebuilt in-process) runs in the RKNN-Toolkit2 **PC simulator** and tracks the ONNX reference numerically; the rebuilt export hash is cross-checked against the uploaded artifact."
+            echo "- **Not proven here:** running the exported \`.rknn\` file itself (\`RKNN.load_rknn\` requires a physical target), on-board Edge2/RK3588 NPU execution, real-time throughput on the board, or listening/separation quality. Those require RKNN-Toolkit-Lite2 on the board and remain unverified."
             echo "- The simulator emulates the compiled graph on the runner CPU; simulator parity is not NPU parity."
           } >> "$GITHUB_STEP_SUMMARY"
 
