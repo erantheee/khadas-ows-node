@@ -4,8 +4,9 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - run: cmake -S . -B build && cmake --build build --parallel && ctest --test-dir build --output-on-failure
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with: {python-version: '3.11'}
+      - run: pip install torch --index-url https://download.pytorch.org/whl/cpu
       - run: pip install -e '.[test]' && pytest -q
