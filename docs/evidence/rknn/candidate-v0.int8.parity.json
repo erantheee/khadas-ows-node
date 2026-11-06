@@ -1,0 +1,177 @@
+{
+  "schema": 1,
+  "purpose": "RKNN-Toolkit2 simulator parity vs ONNX reference (engineering probe)",
+  "verification_method": "in_process_build_and_simulator",
+  "verification_method_note": "RKNN-Toolkit2 cannot run a load_rknn() artifact on the PC simulator; the in-process load_onnx->build->init_runtime() path runs the graph that export_rknn writes and is the toolkit-recommended pre-device check.",
+  "evidence_scope": {
+    "proven_by_this_report": [
+      "the fixed-shape ONNX graph builds for the requested target with the same flags as the exported artifact",
+      "the built graph runs in the RKNN-Toolkit2 PC simulator and tracks the ONNX reference numerically"
+    ],
+    "not_proven": [
+      "loading/running the exported .rknn file itself (requires RK3588/Edge2 hardware)",
+      "on-board Edge2 / RK3588 NPU execution",
+      "real-time throughput on the board",
+      "listening / separation quality"
+    ]
+  },
+  "precision": "int8",
+  "quantized": true,
+  "target": "rk3588",
+  "toolkit_version": "2.5.0",
+  "source_onnx": "artifacts/candidate-v0.onnx",
+  "source_onnx_sha256": "ef6399c76b41ebffaedfbd7e5fdc9f0e28ab60a5954d7bcfdfa46b0b75a9f1d7",
+  "dataset": {
+    "path": "models/calib/dataset.txt",
+    "entries": 8,
+    "sha256": "0a186fc808848b81acd372b56af2b0a0b94ddf079a6a1879c2d3161461bffcf8"
+  },
+  "exported_artifact": {
+    "path": "models/candidate-v0.int8.rknn",
+    "sha256": "e77dd0fe719b14724f31c8c9a3d5735e2a786695dd797c751dc419479f43499a",
+    "bytes": 9249288
+  },
+  "exported_rknn_loadable_in_simulator": false,
+  "exported_rknn_note": "RKNN.load_rknn artifacts cannot run in the PC simulator (toolkit error: 'not support inference on the simulator, please set target first'); running the exported .rknn file itself requires RK3588/Edge2 hardware and remains unverified. This report therefore verifies the identical in-process build graph and records whether the rebuilt export matches the exported artifact byte-for-byte.",
+  "simulator": {
+    "init_runtime_target": null,
+    "note": "RKNN.init_runtime() with no target runs the PC simulator"
+  },
+  "thresholds": {
+    "cosine_min": 0.98,
+    "max_abs_max": null,
+    "mask_sum_atol": 0.05
+  },
+  "source_external_data": [
+    {
+      "location": "candidate-v0.onnx.data",
+      "initializers": 28,
+      "bytes": 2190848,
+      "sha256": "df36fcb7fbf02ef443f71caa19c324483a98199d198ed7df31d7d27c7c45534f"
+    }
+  ],
+  "inlined_onnx": "/tmp/rknn-verify-nl_gy06x/candidate-v0.inlined.onnx",
+  "inlined_onnx_sha256": "95e968fb0984051e143ff37b18e3b57455970fe139d36b4f9d163e295d8e1481",
+  "opset": {
+    "ai.onnx": 18
+  },
+  "input_shapes": {
+    "magnitude": [
+      1,
+      2,
+      1025,
+      345
+    ]
+  },
+  "output_shapes": {
+    "masks": [
+      1,
+      4,
+      1025,
+      345
+    ]
+  },
+  "input": {
+    "shape": [
+      1,
+      2,
+      1025,
+      345
+    ],
+    "seed": 20261106,
+    "sha256": "41b02282ec27c693f43e33330938ce54aa664ab3bee9ca954653c302c72b1d64"
+  },
+  "onnx_reference_output_shape": [
+    1,
+    4,
+    1025,
+    345
+  ],
+  "build_time_sec": 65.557,
+  "rebuilt_export": {
+    "sha256": "0704e5eb51741b6395227cf401e2e13198cd0d66ba019873b2e8a67220341286",
+    "bytes": 9249288,
+    "matches_artifact_sha256": false
+  },
+  "input_attempts": [
+    {
+      "variant": "nchw",
+      "data_format": [
+        "nchw"
+      ],
+      "input_shape": [
+        1,
+        2,
+        1025,
+        345
+      ],
+      "output_shape": [
+        1,
+        4,
+        1025,
+        345
+      ],
+      "layout": "nchw",
+      "cosine_similarity": 0.9999292922561157,
+      "max_abs_error": 0.10761338472366333,
+      "mean_abs_error": 0.003943101968616247,
+      "mask_sum_max_abs_error": 0.000274658203125
+    },
+    {
+      "variant": "default",
+      "data_format": null,
+      "input_shape": [
+        1,
+        2,
+        1025,
+        345
+      ],
+      "error": "ValueError: Traceback (most recent call last):\n  File \"rknn/api/rknn_log.py\", line 344, in rknn.api.rknn_log.error_catch_decorator.error_catch_wrapper\n  File \"rknn/api/rknn_base.py\", line 2795, in rknn.api.rknn_base.RKNNBase.inference\n  File \"rknn/api/simulator.py\", line 620, in rknn.api.simulator.Simulator.inference\n  File \"rknn/api/simulator.py\", line 582, in rknn.api.simulator.Simulator._get_inputs\n  File \"rknn/api/rknn_utils.py\", line 328, in rknn.api.rknn_utils.get_input_img\n  File \"rknn/api/rknn_log.py\", line 95, in rknn.api.rknn_log.RKNNLog.e\nValueError: The input(ndarray) shape (1, 2, 1025, 345) is wrong, expect 'nhwc' like (1, 1025, 345, 2)!\n"
+    },
+    {
+      "variant": "nhwc",
+      "data_format": [
+        "nhwc"
+      ],
+      "input_shape": [
+        1,
+        1025,
+        345,
+        2
+      ],
+      "output_shape": [
+        1,
+        4,
+        1025,
+        345
+      ],
+      "layout": "nchw",
+      "cosine_similarity": 0.9999292922561157,
+      "max_abs_error": 0.10761338472366333,
+      "mean_abs_error": 0.003943101968616247,
+      "mask_sum_max_abs_error": 0.000274658203125
+    }
+  ],
+  "input_convention": "nchw",
+  "metrics": {
+    "output_shape": [
+      1,
+      4,
+      1025,
+      345
+    ],
+    "canonical_output_shape": [
+      1,
+      4,
+      1025,
+      345
+    ],
+    "cosine_similarity": 0.9999292922561157,
+    "max_abs_error": 0.10761338472366333,
+    "mean_abs_error": 0.003943101968616247,
+    "mask_sum_max_abs_error": 0.000274658203125
+  },
+  "checks_passed": true,
+  "passed": true,
+  "failures": []
+}

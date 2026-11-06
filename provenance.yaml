@@ -6,13 +6,34 @@ items:
     source_path: work/stem-ab/runs/band_split_musdb.pt
     source_commit: f896df7
     migration: artifact-reference-only
-    note: Binary checkpoint is ignored by Git and remains quarantined until Edge2 validation.
-  - path: include/khadas_ows/policy.hpp
+    note: >-
+      Binary checkpoint is ignored by Git. Parity with the legacy training definition is
+      reproducible via tools/verify_model_parity.py (strict load, bit-identical masks).
+  - path: include/khadas_ows/conversation.hpp
     source_repo: erantheee/cores3-noise-adapt-demo
     source_paths:
-      - main/controller.hpp
       - main/conversation_awareness.hpp
+      - main/conversation_awareness.cpp
     source_commit: f896df7
-    migration: clean-room-minimal-rewrite
-    note: Preserves only the 0.5 s preview, 0.8 s confirmation and fail-closed identity semantics needed by this demo.
-
+    migration: faithful-port
+    note: >-
+      Only the namespace changed. Params defaults, event-frame neutrality, dialogue veto,
+      500/800/2500 ms timing and 70/60 % floors are preserved so the legacy W1 golden
+      timeline keeps its zero-false-confirmation result (tests/conversation_golden_test.cpp,
+      tests/w1_timeline_golden.h).
+  - path: python/khadas_ows/model.py
+    source_repo: erantheee/cores3-noise-adapt-demo
+    source_path: work/stem-ab/band_scnet.py
+    source_commit: f896df7
+    migration: split-boundary-refactor
+    note: >-
+      The neural body is the unchanged BandSplitNet (state_dict strict load succeeds;
+      masks/stems bit-identical to legacy forward). Streaming STFT / complex-mask
+      application / ISTFT were moved out of the model into the worker DSP so ONNX/RKNN only
+      sees a fixed-shape real magnitude tensor.
+  - path: docs/evidence/
+    source: this repository's verification runs, 2026-11-06
+    migration: recorded-evidence
+    note: >-
+      checkpoint/ONNX/RKNN parity reports, Edge2 build+ctest log, on-board NPU benchmark,
+      60 s real-time stream and the aborted first soak attempt. See docs/handoff.md.

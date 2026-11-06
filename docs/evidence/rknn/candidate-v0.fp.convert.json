@@ -1,0 +1,60 @@
+{
+  "schema": 1,
+  "purpose": "RKNN conversion report (engineering probe)",
+  "evidence_scope": {
+    "proven_by_this_report": "the fixed-shape ONNX model was converted into a target .rknn binary",
+    "not_proven": [
+      "on-board Edge2 / RK3588 NPU execution (requires RKNN-Toolkit-Lite2 on the board)",
+      "real-time throughput on the board",
+      "listening / separation quality"
+    ]
+  },
+  "target": "rk3588",
+  "quantized": false,
+  "precision": "float16",
+  "toolkit_version": "2.5.0",
+  "host": {
+    "platform": "Linux-6.8.0-1070-azure-x86_64-with-glibc2.35",
+    "machine": "x86_64",
+    "python": "3.11.18"
+  },
+  "started_at": "2026-11-06T08:14:06+00:00",
+  "work_dir": null,
+  "source_onnx": "artifacts/candidate-v0.onnx",
+  "source_onnx_sha256": "ef6399c76b41ebffaedfbd7e5fdc9f0e28ab60a5954d7bcfdfa46b0b75a9f1d7",
+  "source_external_data": [
+    {
+      "location": "candidate-v0.onnx.data",
+      "initializers": 28,
+      "bytes": 2190848,
+      "sha256": "df36fcb7fbf02ef443f71caa19c324483a98199d198ed7df31d7d27c7c45534f"
+    }
+  ],
+  "inlined_onnx": "/tmp/rknn-convert-3m9y_dm1/candidate-v0.inlined.onnx",
+  "inlined_onnx_sha256": "95e968fb0984051e143ff37b18e3b57455970fe139d36b4f9d163e295d8e1481",
+  "opset": {
+    "ai.onnx": 18
+  },
+  "input_shapes": {
+    "magnitude": [
+      1,
+      2,
+      1025,
+      345
+    ]
+  },
+  "output_shapes": {
+    "masks": [
+      1,
+      4,
+      1025,
+      345
+    ]
+  },
+  "dataset": null,
+  "build_time_sec": 15.225,
+  "rknn": "models/candidate-v0.fp.rknn",
+  "rknn_sha256": "af92ce83e2a5a9666e9a2c090151c76b39770b891777f2aa3036a3a1fcdb6a6f",
+  "rknn_bytes": 25278331,
+  "finished_at": "2026-11-06T08:14:22+00:00"
+}

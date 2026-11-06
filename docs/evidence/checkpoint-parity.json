@@ -1,0 +1,31 @@
+{
+  "tool": "verify_model_parity",
+  "schema": 1,
+  "checkpoint": "models/candidate-v0.pt",
+  "checkpoint_sha256": "0989b29332a3fe710be85f9c168691b11460e8b8a16df35f3c4cafccaeb745de",
+  "legacy_root": "/Users/eranthe/Documents/Codex/2026-10-13/cores3-noise-adapt-demo",
+  "quarantine_manifest_sha256": "0989b29332a3fe710be85f9c168691b11460e8b8a16df35f3c4cafccaeb745de",
+  "checkpoint_matches_quarantine": true,
+  "architecture": {
+    "name": "MaskNetwork",
+    "base": 128,
+    "layers": 6,
+    "stems": 4
+  },
+  "parameter_count": 550816,
+  "legacy_model": "/Users/eranthe/Documents/Codex/2026-10-13/cores3-noise-adapt-demo/work/stem-ab/band_scnet.py",
+  "legacy_strict_load": {
+    "missing": [],
+    "unexpected": []
+  },
+  "parity": {
+    "mask_max_abs_error": 0.0,
+    "stem_max_abs_error": 0.0,
+    "mask_sum_max_abs_error": 1.7881393432617188e-07,
+    "sample_rate": 44100,
+    "seconds": 2,
+    "seed": 20261106
+  },
+  "parameter_count_in_055m_class": true,
+  "verdict": "PASS"
+}

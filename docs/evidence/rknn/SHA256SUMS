@@ -1,0 +1,6 @@
+af92ce83e2a5a9666e9a2c090151c76b39770b891777f2aa3036a3a1fcdb6a6f  models/candidate-v0.fp.rknn
+e77dd0fe719b14724f31c8c9a3d5735e2a786695dd797c751dc419479f43499a  models/candidate-v0.int8.rknn
+c1a0d80c94fdd234d0d6d4316ec36916d5585153aef1de1a40e5bf4f83f326a7  reports/candidate-v0.fp.convert.json
+e07e40f8378fae0babe899fa47e0bb82ee845f8db3cd2b7fe61bb7bd17155e1d  reports/candidate-v0.int8.convert.json
+21c21d41c84450688f64f01279ba452f3ff218dc92ef66fe0b0ebcd7aade26f4  reports/candidate-v0.fp.parity.json
+0d1ec6559713f8f35194264fd257c53c811422e3e9369b76a9e26563d90aace9  reports/candidate-v0.int8.parity.json

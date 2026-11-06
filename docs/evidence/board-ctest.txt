@@ -1,0 +1,18 @@
+# board build + ctest (aarch64), 2026-11-06T08:47:26Z
+Linux Khadas 6.1.118 #1.7.5 SMP Thu Sep 25 22:51:21 CST 2025 aarch64 aarch64 aarch64 GNU/Linux
+PRETTY_NAME="Ubuntu 24.04.3 LTS"
+NAME="Ubuntu"
+Python 3.12.3
+
+    Start 2: policy_test
+2/5 Test #2: policy_test ......................   Passed    0.00 sec
+    Start 3: conversation_golden_test
+3/5 Test #3: conversation_golden_test .........   Passed    0.01 sec
+    Start 4: failure_matrix_test
+4/5 Test #4: failure_matrix_test ..............   Passed    0.37 sec
+    Start 5: server_env_test
+5/5 Test #5: server_env_test ..................   Passed    0.40 sec
+
+100% tests passed, 0 tests failed out of 5
+
+Total Test time (real) =   0.79 sec

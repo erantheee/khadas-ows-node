@@ -1,0 +1,72 @@
+{
+  "schema": 1,
+  "purpose": "ONNX integrity and PyTorch/ONNXRuntime parity (engineering probe)",
+  "evidence_scope": {
+    "proven_by_this_report": "the published ONNX artifact loads with its external data, has the expected boundary, and passes a deterministic ONNXRuntime forward pass (plus torch parity when --checkpoint is supplied)",
+    "not_proven": [
+      "RKNN conversion",
+      "on-board Edge2 NPU execution",
+      "listening quality"
+    ]
+  },
+  "onnx": "artifacts/candidate-v0.onnx",
+  "onnx_sha256": "ef6399c76b41ebffaedfbd7e5fdc9f0e28ab60a5954d7bcfdfa46b0b75a9f1d7",
+  "checks": {
+    "sha256sums": {
+      "path": "artifacts/SHA256SUMS",
+      "matched": {
+        "candidate-v0.onnx": true,
+        "candidate-v0.onnx.data": true
+      }
+    },
+    "graph": {
+      "checker": "ok",
+      "opset": 18,
+      "boundary": "ok"
+    },
+    "onnxruntime": {
+      "input_seed": 20261106,
+      "output_shape": [
+        1,
+        4,
+        1025,
+        345
+      ],
+      "finite": true,
+      "mask_sum_max_abs_error": 1.1920928955078125e-07,
+      "mask_sum_atol": 0.0001,
+      "providers": [
+        "CPUExecutionProvider"
+      ]
+    },
+    "torch_parity": {
+      "skipped": "no --checkpoint supplied"
+    }
+  },
+  "external_data": [
+    {
+      "location": "candidate-v0.onnx.data",
+      "bytes": 2190848,
+      "sha256": "df36fcb7fbf02ef443f71caa19c324483a98199d198ed7df31d7d27c7c45534f"
+    }
+  ],
+  "opset": {
+    "ai.onnx": 18
+  },
+  "input_shapes": {
+    "magnitude": [
+      1,
+      2,
+      1025,
+      345
+    ]
+  },
+  "output_shapes": {
+    "masks": [
+      1,
+      4,
+      1025,
+      345
+    ]
+  }
+}

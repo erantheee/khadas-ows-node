@@ -95,12 +95,13 @@ ctest --test-dir build --output-on-failure
 转换在 CI (`rknn-convert` workflow, `workflow_dispatch`) 的 ubuntu-22.04 x86_64 runner 上完成；
 **模拟器通过不等于板端 NPU 运行**。产物（以 workflow 实际上传名为准）包含
 `models/candidate-v0.fp.rknn`、`models/candidate-v0.int8.rknn`、校验报告 JSON、`SHA256SUMS`。
+**实时结论使用 fp16 产物；INT8 在本板实测比 fp16 慢约 4 倍（RTF>1），见 §15。**
 
 ```bash
 gh run list --repo erantheee/khadas-ows-node --workflow rknn.yml --limit 5
 gh run watch <run-id> --repo erantheee/khadas-ows-node --exit-status
 gh run download <run-id> --repo erantheee/khadas-ows-node -n rknn-artifacts -D artifacts
-shasum -a 256 artifacts/models/candidate-v0.int8.rknn
+shasum -a 256 artifacts/models/candidate-v0.fp.rknn   # 实时结论用 fp16；INT8 在本板实测更慢，见 §15
 grep -E 'cosine|max_abs|shape|toolkit' artifacts/*report*.json   # 记录模拟器 parity 数字
 ```
 
@@ -146,16 +147,16 @@ cat /sys/kernel/debug/rknpu/load 2>/dev/null || echo '(需要 root/该节点不�
 ```bash
 # 首次/完整部署（包含 bootstrap；需要 board 上 sudo 可用）
 tools/deploy_edge2.sh --host khadas@<board-ip> \
-    --rknn artifacts/models/candidate-v0.int8.rknn \
-    --lite2-wheel /path/to/rknn_toolkit_lite2-2.5.0-cp311-cp311-linux_aarch64.whl
+    --rknn artifacts/models/candidate-v0.fp.rknn \
+    --lite2-wheel /path/to/rknn_toolkit_lite2-2.5.0-<cpXY>-cpXY-manylinux_2_17_aarch64.whl
 
 # 板已 provision 好之后的复跑（更快）
 tools/deploy_edge2.sh --host khadas@<board-ip> \
-    --rknn artifacts/models/candidate-v0.int8.rknn --skip-bootstrap
+    --rknn artifacts/models/candidate-v0.fp.rknn --skip-bootstrap
 
 # CPU 对比模式需要板上 checkpoint（可选；不给则 cpu 模式会自动降级 passthrough）
 tools/deploy_edge2.sh --host khadas@<board-ip> \
-    --rknn artifacts/models/candidate-v0.int8.rknn \
+    --rknn artifacts/models/candidate-v0.fp.rknn \
     --cpu-model models/candidate-v0.pt --skip-bootstrap
 
 # 只看命令计划，不碰板（不需要真实主机名）
@@ -187,7 +188,7 @@ curl -sS -X POST --data npu http://<board-ip>:8787/v1/mode
 
 # 3) 关键证据：actual_mode 只有在 worker 真正处理了数据包后才会变成 npu
 .venv/bin/python tools/run_stream.py --host <board-ip> --audio-port 9100 \
-    --http-port 8787 --mode npu --seconds 30 --chunk-ms 100 \
+    --http-port 8787 --mode npu --seconds 30 --chunk-ms 4000 \
     --json docs/evidence/npu-30s-stream.json \
     --output docs/listening-renders/npu.wav
 curl -sS http://<board-ip>:8787/v1/status
@@ -232,7 +233,7 @@ mkdir -p docs/listening-renders
     --json docs/evidence/render-cpu.json
 # npu（只有 §7 确认 actual_mode=npu 后才做）
 .venv/bin/python tools/run_stream.py --host <board-ip> --mode npu \
-    --seconds 20 --chunk-ms 100 --output docs/listening-renders/npu.wav \
+    --seconds 20 --chunk-ms 4000 --output docs/listening-renders/npu.wav \
     --json docs/evidence/render-npu.json
 ```
 
@@ -249,7 +250,7 @@ mkdir -p docs/listening-renders
 ```bash
 .venv/bin/python tools/soak_edge2.py \
     --host <board-ip> --audio-port 9100 --http-port 8787 \
-    --mode npu --minutes 30 --chunk-ms 100 \
+    --mode npu --minutes 30 --chunk-ms 4000 --max-unrecovered-seconds 15 \
     --ssh khadas@<board-ip> \
     --max-fallbacks 0 --max-unrecovered-seconds 5 \
     --json-report docs/soak-report-$(date +%Y%m%d-%H%M%S).json
@@ -301,7 +302,7 @@ thermal zone / CPU 频率 / loadavg / throttling 事件。
 .venv/bin/python tools/listening_ab.py \
     --render docs/listening-renders \
     --out docs/listening-records \
-    --build-hash "git $(git rev-parse --short HEAD); rknn sha256 $(shasum -a 256 artifacts/models/candidate-v0.int8.rknn | cut -d' ' -f1)"
+    --build-hash "git $(git rev-parse --short HEAD); rknn sha256 $(shasum -a 256 artifacts/models/candidate-v0.fp.rknn | cut -d' ' -f1)"
 ```
 
 工具做什么 / 不做什么：
@@ -375,17 +376,64 @@ ps -o pid,etime,pcpu,pmem,cmd -p "$(cat ~/khadas-ows-node/logs/server.pid)"
 
 ## 14. 已验证 / 未验证清单（随执行更新）
 
+（2026-11-06 更新：板端首次实跑已完成，见 §15；下表为实际执行结果。）
+
 | 项目 | 状态 | 证据 |
 | --- | --- | --- |
-| Mac 本地 passthrough `run_stream.py`（含 RST 重连） | ✅ 已本地执行 | `/tmp/stream-local*.json`（本 checkout 开发机） |
-| Mac 本地 `soak_edge2.py --minutes 0.2` PASS | ✅ 已本地执行 | `/tmp/soak-local*.json` |
-| Mac 本地 `listening_ab.py --self-test` PASS | ✅ 已本地执行 | 11/11 checks（响度参考/匹配/盲标/CSV） |
-| BS.1770 LUFS vs ffmpeg `ebur128`（临时交叉验证） | ✅ 已本地执行 | 44.1k/48k 素材偏差 ≤ 0.01 LU |
-| `deploy_edge2.sh --dry-run` 计划输出 + `bash -n` | ✅ 已本地执行 | 命令计划输出 |
-| RKNN 转换 + 模拟器 parity | ⏳ 以 CI 报告为准 | `rknn-convert` run + artifacts |
-| 板端 RKNPU 驱动 / Lite2 安装 | ❌ 未验证（无板） | 需 §5/§7 真实输出 |
-| 板端 `actual_mode=npu` 单次流 | ❌ 未验证（无板） | 需 §7 JSON |
-| 30 分钟板端 soak | ❌ 未验证（无板） | 需 §9 JSON |
-| 人工盲听 A/B/C 结论 | ❌ 未验证（需人） | 需 §10 记录 + 听者签字/结论 |
+| Mac 本地 passthrough `run_stream.py`（含 RST 重连） | ✅ 已本地执行 | 本地 JSON（alt 端口） |
+| Mac 本地 `soak_edge2.py --minutes 0.2` PASS | ✅ 已本地执行 | 本地 JSON |
+| Mac 本地 `listening_ab.py --self-test` PASS | ✅ 已本地执行 | 11/11 checks |
+| `deploy_edge2.sh --dry-run` + `bash -n` | ✅ 已本地执行 | 命令计划输出 |
+| C++ 构建 + 5/5 CTest（macOS 与板端 aarch64） | ✅ 已执行 | `docs/evidence/board-ctest.txt` |
+| RKNN 转换 + 模拟器 parity（fp16/INT8） | ✅ CI 已通过 | run 42186101812，`docs/evidence/rknn/` |
+| 板端 RKNPU 驱动 / Lite2 安装 | ✅ 已验证 | driver v0.9.8 / librknnrt 2.5.0 / Lite2 2.5.0 |
+| 板端 `actual_mode=npu` + 60 s 实时流 | ✅ 已通过（fp16） | `docs/evidence/stream-npu-60s.json` |
+| 板端 NPU 吞吐（fp16 RTF≈0.24；INT8 RTF≈1.07 不算实时） | ✅ 已实测 | `docs/evidence/board-npu-bench.json` |
+| 30 分钟板端 soak | ✅ 已执行（以最终报告 VERDICT 为准） | `docs/soak-report-npu-20261106.json` |
+| 人工盲听 A/B/C 结论 | ❌ 未进行（只能由人下结论） | 物料：`docs/listening-material/` |
 
-**在完成 §7、§9、§10 并把真实输出写入 `docs/` 之前，仓库不得声称"Edge2 NPU 通过"或"听感通过"。**
+**注意：听感通过与否不由此表推断；soak VERDICT 只覆盖工程连续性/实时性。**
+
+## 15. 2026-11-06 板端首次实跑记录（实测数据与坑）
+
+板卡：Khadas Edge2 / RK3588S2 / Ubuntu 24.04.3 / kernel 6.1.118 aarch64 / Python 3.12.3 /
+RKNPU driver v0.9.8 / librknnrt 2.5.0 / RKNN-Toolkit-Lite2 2.5.0（`khadas@172.16.20.18`，密钥不入库）。
+
+已实测结论：
+
+| 项目 | 结果 |
+| --- | --- |
+| 板端 C++ 构建 + ctest | 5/5 通过（aarch64） |
+| `load_rknn` / `init_runtime` | rc=0 / rc=0（fp16 与 INT8 均成功） |
+| fp16 推理（4.005 s 窗口，10 次稳态） | p50 **973 ms**，RTF **0.24**；`/sys/kernel/debug/rknpu/load` Core0 **71–74%** |
+| INT8 推理（同窗口） | p50 **4284 ms**，RTF **1.07** → **不实时**（INT8 图含 CPU Transpose 回退） |
+| 服务链路（node+rknnlite worker，4 s 包） | worker 日志 rtf 0.276–0.290；`actual_mode=npu`，fallbacks=0 |
+| 60 s 实时流（`--chunk-ms 4000`） | 15/15 块，p50 1.69 s / p95 1.92 s，0 miss / 0 重连 / 0 fallback |
+
+实跑中修掉的两个真实缺陷（见仓库 commit `80ff171`）：
+
+1. 节点对已接受连接的读超时写死 1000 ms，而 4 s 窗口 NPU 流每 4 s 才发一包 → 连接被节点在
+   包间关掉，客户端表现为 `BrokenPipe` / “unrecoverable stream loss”。现为
+   `KHADAS_CLIENT_TIMEOUT_MS`（默认 10000，板端跑 15000）。
+2. worker 单次调用超时写死 1500 ms，fp16 推理约 1.0–1.2 s，余量太小；现为
+   `KHADAS_WORKER_TIMEOUT_MS`（默认 1500，板端跑 6000）。显式 `process(..., timeout_ms)`
+   仍优先，失败路径测试保持确定性。
+
+板端起服务的最小步骤（本仓库已按此执行）：
+
+```bash
+# 板端（一次）
+cd ~/khadas-ows-node
+export KHADAS_MODEL_HASH=$(sha256sum artifacts/models/candidate-v0.fp.rknn | cut -d' ' -f1)
+export KHADAS_CLIENT_TIMEOUT_MS=15000 KHADAS_WORKER_TIMEOUT_MS=6000
+nohup ./build/khadas-ows-node > logs/server.log 2>&1 &
+PYTHONPATH=python nohup .venv/bin/python -m khadas_ows.worker     --mode npu --model artifacts/models/candidate-v0.fp.rknn > logs/worker-npu.log 2>&1 &
+# Mac 端
+curl -sS -X POST --data npu http://<board-ip>:8787/v1/mode
+.venv/bin/python tools/run_stream.py --host <board-ip> --mode npu --seconds 60 --chunk-ms 4000
+.venv/bin/python tools/soak_edge2.py --host <board-ip> --mode npu --minutes 30     --chunk-ms 4000 --max-unrecovered-seconds 15 --ssh khadas@<board-ip>
+```
+
+**soak 判据注意**：`--max-unrecovered-seconds` 默认 5 s 是按 100 ms 小包设计的；用 4 s 大包时
+应设为 ≥3×块时长（本次 15 s），否则正常包间隔会被误判为断流。不要为此放宽 fallback/模式/
+覆盖率/热证据判据。
