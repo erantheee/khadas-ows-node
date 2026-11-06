@@ -27,8 +27,11 @@ Use the tool (see `docs/edge2-runbook.md` §10):
 - Root-cause evidence: `docs/evidence/stem-drums-analysis-20261106.json` (drums SDR ~0 dB,
   drums estimate 23-34 dB below truth, stem order verified correct, checkpoint trained only
   6 of 20 planned epochs).
-- Status: observation recorded, not a formal pass/fail rating; the user has not yet given a
-  final listening conclusion. No score is recorded.
+- Human conclusion (user, 2026-11-06): "以后再说吧，主要是能分开，你也能调包络" — the
+  accepted outcome for this version is: **separation works well enough to be listened to and
+  the envelope-modulation chain is implemented/adjustable**; the drums-stem quality issue is
+  recorded and its fix (continued training) is **deferred by the user**. No score is recorded
+  and no continued-training run was started.
 
 ## Session record template
 

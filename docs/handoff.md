@@ -98,21 +98,45 @@ Human listening (interactive terminal required; the tool refuses to fake it):
 5. **INT8 is not automatically faster.** The INT8 artifact is ~4× slower than fp16 on this
    board (CPU `Transpose` fallbacks for oversized tensors), so the realtime claim is fp16-only.
 
+## Listening status (2026-11-06, first human session)
+
+- The user listened to the real-music material (live QQ Music capture): CPU and NPU renditions
+  are indistinguishable, separation is acceptable to the listener overall, **the drums stem
+  sounds abnormal** (measured: −45 dBFS vs −11.7 dBFS mixture, 5.6 kHz centroid, drums SDR
+  ≈ 0 dB, estimate 23–34 dB below truth; stem order verified by a 4×4 SDR matrix; checkpoint
+  trained only 6/20 epochs — see `docs/evidence/stem-drums-analysis-20261106.json`).
+- Accepted outcome for this version (user): "以后再说吧，主要是能分开，你也能调包络" —
+  separation is demonstrable and the envelope-modulation chain is implemented and adjustable;
+  the drums/model-quality fix (continued training) is **deferred** and was not started.
+- The envelope chain is implemented in `python/khadas_ows/strategy.py` +
+  `worker.py --output-mode envelope`. Tunable knobs: `--scenario
+  quiet|broadband|keyboard|wind|babble`, `--strategy-strength 0..1`, `--scenario-start-ms /
+  --scenario-end-ms`; role targets (`SCENARIO_TARGETS`), role mapping (`ROLE_MAP`), hysteresis
+  (`RoleTracker`: 2 dB / 2 windows) and envelope times (`EnvelopeFollower`: 400 ms attack /
+  1200 ms release) are plain constants in `strategy.py`.
+- Rendered material (git-ignored WAVs): `docs/listening-material/qq-music/stems/` (single
+  stems) and `docs/listening-material/qq-music-envelope-{broadband,keyboard,broadband-strong}/`
+  (envelope-modulated music + blind sets); see `docs/listening-material/README.md`.
+
 ## Next steps (in priority order)
 
-1. **Human listening** on passthrough / CPU / NPU with `tools/listening_ab.py`; record the
-   conclusion in `docs/listening-template.md`. Expectation: engineering pass, quality fail
-   (candidate SDR ≈ 0 dB), which is fine — the plan separates the two.
-2. **Product-latency model**: re-export/re-train with a much smaller fixed window (e.g. 32–64
+1. **Human listening** — first session done (see above); remaining re-listening after any
+   model/strategy change optional.
+2. **Model quality (deferred by user, "以后再说")**: the candidate is undertrained (6/20
+   epochs) and drums is unusable; options are (a) resume training from the checkpoint with
+   drums-weighted loss (~1.5–2.5 h on MPS), or (b) train a 2.59M-class Band-SCNet from scratch
+   (industry precedent SDR 7.79 dB, longer and needs an NPU RTF re-check). Do not start without
+   the user's go-ahead.
+3. **Product-latency model**: re-export/re-train with a much smaller fixed window (e.g. 32–64
    frames) and re-measure NPU RTF and stability; the current 4.005 s window is a throughput
    probe only.
-3. **INT8 root cause**: remove/absorb the oversized `Transpose` (layout-friendly export, or
+4. **INT8 root cause**: remove/absorb the oversized `Transpose` (layout-friendly export, or
    keep the mask head in CPU-friendly form) to get the INT8 speed advantage back; also
    investigate the single-core fallback for 6 conv layers.
-4. **Async/pipelined node↔worker protocol**: the current protocol is strictly synchronous, so
+5. **Async/pipelined node↔worker protocol**: the current protocol is strictly synchronous, so
    one 4 s window blocks the audio path for ~1–2 s; a pipelined design is required for real
    product latency (and would keep the p99 honest).
-5. Deferred by the approved plan: Edge2 DMIC re-calibration and perception integration
+6. Deferred by the approved plan: Edge2 DMIC re-calibration and perception integration
    (Phase 2B), Bluetooth/phone relay topology, full ESP32 peripheral migration, production
    hardware and model training decisions.
 

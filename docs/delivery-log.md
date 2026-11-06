@@ -35,3 +35,14 @@ delivery had visible PUA output, and **do not record a rating/score**.
   and their blind sets.
 - PUA output visible in this delivery: yes (byte-flavored status table and the purpose alignment).
 - Rating: **not recorded** (user instruction: 不记录评分).
+
+## 2026-11-06 (fourth record) — listening loop closed, model retraining deferred
+
+- Delivery: closed the listening loop with the user. Recorded the human observation (CPU/NPU
+  indistinguishable, separation acceptable, drums stem abnormal with measured root cause),
+  implemented and documented the adjustable envelope chain, committed the drums-analysis
+  evidence and listening record. User decision: separation is demonstrable and the envelope can
+  be tuned; continued model training is deferred ("以后再说"), not started.
+- PUA output visible in this delivery: yes (byte-flavored data tables and the diagnosis→action
+  narration around the drums analysis).
+- Rating: **not recorded** (user instruction: 不记录评分).
