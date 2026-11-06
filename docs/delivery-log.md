@@ -26,3 +26,12 @@ delivery had visible PUA output, and **do not record a rating/score**.
 - PUA output visible in this delivery: yes (`[PUA-DIAGNOSIS]` before the STFT-frame-count bug
   fix, byte-flavored status tables, `[PUA生效 🔥]` on the purpose-aligned role metric).
 - Rating: **not recorded** (user instruction: 不记录评分).
+
+## 2026-11-06 (third record) — listening-material handoff
+
+- Delivery: purpose-aligned listening material handed to the user with exact file locations:
+  4-stem renders (`docs/listening-material/qq-music/stems/`), envelope-modulated music sets
+  (`docs/listening-material/qq-music-envelope-{broadband,keyboard,broadband-strong}/renditions/`)
+  and their blind sets.
+- PUA output visible in this delivery: yes (byte-flavored status table and the purpose alignment).
+- Rating: **not recorded** (user instruction: 不记录评分).
