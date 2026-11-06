@@ -1,0 +1,54 @@
+{
+  "sets": [
+    {
+      "set": "qq-music-envelope-broadband",
+      "cpu_npu_diff_rms": 8.5e-05,
+      "cpu_npu_diff_db_rel": -69.7,
+      "effect_event_db_rel": -18.1,
+      "quiet_window_diff_db_rel": -78.0
+    },
+    {
+      "set": "qq-music-envelope-keyboard",
+      "cpu_npu_diff_rms": 9.2e-05,
+      "cpu_npu_diff_db_rel": -69.0,
+      "effect_event_db_rel": -16.7,
+      "quiet_window_diff_db_rel": -78.0
+    },
+    {
+      "set": "qq-music-envelope-broadband-strong",
+      "cpu_npu_diff_rms": 0.000127,
+      "cpu_npu_diff_db_rel": -66.2,
+      "effect_event_db_rel": -14.2,
+      "quiet_window_diff_db_rel": -78.0
+    }
+  ],
+  "purpose": "Purpose-aligned listening material: consumer hears stems->role->scenario gains->envelope-shaped remix, not raw stems",
+  "input": "45 s live QQ Music capture (Core Audio process tap, tools/capture_qqmusic.py)",
+  "chain": "computer PCM -> C++ node -> worker: 4 masks -> per-stem RMS -> dominant roles (lead/rhythm/low/bed, hysteresis 2 dB/2 windows) -> contrast-only per-stem gains by scenario -> 400 ms attack / 1200 ms release envelope -> remixed music",
+  "scenario_window": "8-30 s of the 45 s excerpt; 0-8 s must stay ~bit-identical and 30-45 s is the release tail",
+  "role_policy": {
+    "lead": "vocals|other -> 0 dB after contrast",
+    "rhythm": "drums",
+    "low": "bass|drums",
+    "bed": "other",
+    "broadband_targets_db": {
+      "lead": 3.0,
+      "rhythm": 1.5,
+      "low": 1.0
+    },
+    "keyboard_targets_db": {
+      "lead": 3.0,
+      "rhythm": 2.0,
+      "low": 0.5
+    },
+    "contrast_only": "top role stays 0 dB, competitors attenuated only (no boosts, no headroom eating)"
+  },
+  "observed_role_decision_for_this_song": {
+    "lead": "other",
+    "rhythm": "drums",
+    "low": "bass",
+    "bed": "other"
+  },
+  "note_on_quality": "role information from this candidate is unreliable on real music (MUSDB role agreement 0-40% on the discriminating lead/low roles), so the envelope demo demonstrates the chain, not an accepted product tuning",
+  "cpu_vs_npu": "renditions differ by ~-66..-70 dB relative (numerically identical); the NPU path adds no audible difference, as expected for the same weights with fp16 rounding"
+}

@@ -58,6 +58,53 @@ Direct pieces: `tools/capture_qqmusic.py` (tap capture, `--launch` opens the app
 `tools/render_modes.py` (three renditions of one excerpt),
 `tools/prepare_blind.py` (level matching + blinded A/B/C without an interactive terminal).
 
+## Envelope-modulated listening (the actual purpose of separation)
+
+The consumer never hears a stem. The product chain is: stems -> dominant roles
+(`lead/rhythm/low/bed`, hysteresis) -> per-stem gains for the current noise scenario
+(contrast-only, attenuation only) -> 400 ms attack / 1200 ms release envelope -> remixed
+music. The Edge2 probe now implements this (`python/khadas_ows/strategy.py`,
+`worker.py --output-mode envelope`), and these sets were rendered from the live QQ Music
+capture (45 s, scenario window **8-30 s**, so 0-8 s is untouched and 30-45 s is the release
+tail):
+
+| set | scenario | strength | what it is |
+| --- | --- | --- | --- |
+| `qq-music-envelope-broadband/` | broadband noise | 0.6 | vocals -2.4 / drums -0.9 / bass -1.2 dB in the event window |
+| `qq-music-envelope-keyboard/` | keyboard clicks | 0.6 | keyboard profile (rhythm protected more than low) |
+| `qq-music-envelope-broadband-strong/` | broadband noise | 1.0 | stronger contrast, if 0.6 is too subtle to hear |
+| `qq-music/stems/` | — | — | individual `vocals/drums/bass/other/mixture` estimates for listening to the separation itself |
+
+Each envelope set has `renditions/` (passthrough = untouched excerpt, cpu = CPU-stem-driven
+envelope output, npu = Edge2-NPU-stem-driven envelope output) and `blind-set/` (level-matched
+A/B/C + sealed `key.json`). CPU and NPU renditions differ by ~-66..-70 dB relative (same
+weights, fp16 rounding), so a blind test cannot separate them -- that is expected and is
+recorded, not hidden.
+
+```bash
+cd docs/listening-material/qq-music-envelope-broadband/blind-set
+afplay A.wav; afplay B.wav; afplay C.wav   # order in presentation.txt; level matched
+# compare named renditions / stems directly:
+afplay ../renditions/passthrough.wav ../renditions/cpu.wav
+afplay ../../qq-music/stems/vocals.wav ../../qq-music/stems/drums.wav
+```
+
+Re-render any scenario/strength yourself:
+
+```bash
+ARGS="--output-mode envelope --scenario wind --scenario-start-ms 8000 --scenario-end-ms 30000 --strategy-strength 0.6"
+.venv/bin/python tools/render_modes.py --input /tmp/qq-music-capture.wav --start 0 --seconds 45 \
+  --out docs/listening-material/qq-music-envelope-wind --output-gain unity --worker-args "$ARGS"
+# for the npu rendition restart the board worker with the same $ARGS first (see docs/edge2-runbook.md)
+.venv/bin/python tools/render_stems.py --input /tmp/qq-music-capture.wav \
+  --out docs/listening-material/qq-music/stems
+```
+
+What to judge (purpose-aligned): does the envelope-modulated music stay pleasant while the
+competing roles drop? Any pumping/zipper at the 8 s attack and 30 s release? Does the
+separation leakage (audible in `stems/`) make the remix worse than plain volume ducking? The
+engineering status of the role information itself is in `docs/handoff.md` / the evidence JSON.
+
 ## Running the blind test (interactive terminal required)
 
 ```bash

@@ -21,3 +21,10 @@ models/calib/
 
 # local tool build cache (Swift recorder etc.)
 .cache/
+
+# generated listening media (recreate with tools/render_modes.py, keep the READMEs)
+docs/listening-material/**/renditions/
+docs/listening-material/**/blind-set/
+docs/listening-material/**/stems/
+docs/listening-material/**/render-report.json
+docs/listening-material/**/*.wav

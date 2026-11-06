@@ -44,6 +44,8 @@ from pathlib import Path
 
 import numpy as np
 
+from . import strategy as role_strategy
+
 HEADER = struct.Struct("<IIQIHHi")
 MAGIC = 0x4B4F5753
 SAMPLE_RATE = 44100
@@ -294,8 +296,30 @@ class StreamingWindowManager:
         backend,
         window_frames: int = MODEL_FRAMES,
         window_hop: int | None = None,
+        output_gain: str = "peak",
+        output_mode: str = "stem",
+        scenario: str = "quiet",
+        scenario_start_s: float = 0.0,
+        scenario_end_s: float = 1e9,
+        strategy_strength: float = 0.6,
     ) -> None:
         self.backend = backend
+        if output_gain not in ("peak", "unity"):
+            raise WorkerError(f"output_gain must be 'peak' or 'unity', got {output_gain!r}")
+        if output_mode not in ("stem", "envelope"):
+            raise WorkerError(f"output_mode must be 'stem' or 'envelope', got {output_mode!r}")
+        if scenario not in role_strategy.SCENARIOS:
+            raise WorkerError(f"unknown scenario {scenario!r}; expected {role_strategy.SCENARIOS}")
+        self.output_gain = output_gain
+        self.output_mode = output_mode
+        self.scenario = scenario
+        self.scenario_start_s = float(scenario_start_s)
+        self.scenario_end_s = float(scenario_end_s)
+        self.strategy_strength = float(strategy_strength)
+        self.role_tracker = role_strategy.RoleTracker()
+        self.envelope = role_strategy.EnvelopeFollower()
+        self.samples_processed = 0
+        self.role_history: list[dict] = []
         self.window_frames = int(window_frames)
         self.window_hop = int(window_hop if window_hop is not None else window_frames)
         if self.window_frames < 1:
@@ -357,14 +381,69 @@ class StreamingWindowManager:
             raise WorkerError(f"the fixed-shape model expects {MODEL_CHANNELS} channels, got {channels}")
         source = pcm[: frames * channels].reshape(-1, channels).T.copy()  # [channels, frames]
         spectrum = stft(source)  # complex64 [2,1025,T]
-        masks = self.masks(np.abs(spectrum))  # [1,4,1025,T]
+        magnitude = np.abs(spectrum)
+        masks = self.masks(magnitude)  # [1,4,1025,T]
+        if self.output_mode == "envelope":
+            output = self._envelope_output(spectrum, masks, frames)
+            self.samples_processed += frames
+            return np.ascontiguousarray(output, dtype="<f4").reshape(-1)
         vocals_spec = masks[0, 0].astype(np.complex64) * spectrum
         vocals = istft(vocals_spec, frames)  # [2,frames]
-        source_peak = float(np.max(np.abs(source)))
-        vocal_peak = float(np.max(np.abs(vocals)))
-        scale = source_peak / vocal_peak if vocal_peak > 1e-9 else 0.0
-        output = (vocals * scale).T
+        if self.output_gain == "unity":
+            # No per-packet level manipulation: the extracted stem keeps the model's own
+            # scale, so the 4 s window boundaries cannot introduce level jumps. Use this for
+            # listening/analysis; 'peak' is the historical probe convention.
+            output = vocals.T
+        else:
+            source_peak = float(np.max(np.abs(source)))
+            vocal_peak = float(np.max(np.abs(vocals)))
+            scale = source_peak / vocal_peak if vocal_peak > 1e-9 else 0.0
+            output = (vocals * scale).T
         return np.ascontiguousarray(output, dtype="<f4").reshape(-1)
+
+    def _envelope_output(self, spectrum: np.ndarray, masks: np.ndarray, pcm_frames: int) -> np.ndarray:
+        """Stems -> dominant roles -> scenario gains -> envelope-shaped remix.
+
+        `pcm_frames` is the number of time-domain samples in the packet; the STFT frame
+        count (masks.shape[-1]) is what the per-frame gain envelope walks over.
+        """
+        stft_frames = int(masks.shape[-1])
+        # 1) per-stem estimated energy for the role decision (one ISTFT per stem)
+        stats_db: dict[str, float] = {}
+        for index, stem in enumerate(role_strategy.STEMMS):
+            stem_signal = istft(masks[0, index].astype(np.complex64) * spectrum, pcm_frames)
+            rms = float(np.sqrt((np.asarray(stem_signal, dtype=np.float64) ** 2).mean()))
+            stats_db[stem] = 20.0 * np.log10(max(rms, 1e-12))
+        roles = self.role_tracker.update(stats_db)
+        # 2) scenario gain targets (contrast-only: attenuate competitors, never boost)
+        t0 = self.samples_processed / SAMPLE_RATE
+        active = role_strategy.scenario_active(t0, self.scenario_start_s, self.scenario_end_s)
+        if active:
+            raw = role_strategy.role_profile(roles, self.scenario)
+            target = role_strategy.contrast_only_profile(raw, self.strategy_strength)
+        else:
+            target = {stem: 0.0 for stem in role_strategy.STEMMS}
+        # 3) envelope-shaped per-frame gains (attack 400 ms / release 1200 ms)
+        gain_frames = np.zeros((len(role_strategy.STEMMS), stft_frames), dtype=np.float32)
+        for frame_index in range(stft_frames):
+            applied = self.envelope.step(target, HOP / SAMPLE_RATE)
+            gain_frames[:, frame_index] = [applied[stem] for stem in role_strategy.STEMMS]
+        linear = (10.0 ** (gain_frames / 20.0)).astype(np.float32)  # [4, T]
+        weights = np.einsum("st,sft->ft", linear, masks[0])  # [1025,T]
+        if weights.shape != spectrum.shape[-2:]:
+            raise WorkerError(f"envelope weights shape {weights.shape} != spectrum {spectrum.shape[-2:]}")
+        remixed_spec = spectrum * weights.astype(np.complex64)
+        remixed = istft(remixed_spec, pcm_frames)  # [2,pcm_frames]
+        self.role_history.append({
+            "t_s": round(t0, 3),
+            "scenario": self.scenario if active else "quiet",
+            "roles": roles,
+            "stem_rms_db": {stem: round(stats_db[stem], 2) for stem in role_strategy.STEMMS},
+            "target_gain_db": {stem: round(target[stem], 2) for stem in role_strategy.STEMMS},
+            "applied_gain_db_last_frame": {stem: round(float(gain_frames[i, -1]), 2)
+                                           for i, stem in enumerate(role_strategy.STEMMS)},
+        })
+        return remixed.T
 
 
 def process(pcm: np.ndarray, channels: int, backend: str = "torch", model: str | None = None) -> np.ndarray:
@@ -393,6 +472,7 @@ def serve(manager: StreamingWindowManager, mode: str, backend_name: str, model: 
         f"{mode} worker backend={backend_name} ready port={port} "
         f"model={model or '-'} sha256={model_sha or '-'} "
         f"window={manager.window_frames}x{HOP} ({manager.latency_seconds:.3f}s) "
+        f"gain={manager.output_gain} mode={manager.output_mode} scenario={manager.scenario} "
         "evidence=software-only",
         flush=True,
     )
@@ -416,10 +496,21 @@ def serve(manager: StreamingWindowManager, mode: str, backend_name: str, model: 
                     started = time.time()
                     output = manager.process(pcm, channels)
                     elapsed = time.time() - started
-                    print(
-                        f"packet seq={sequence} frames={frames} rtf={elapsed / (frames / SAMPLE_RATE):.3f}",
-                        flush=True,
-                    )
+                    if manager.output_mode == "envelope" and manager.role_history:
+                        last = manager.role_history[-1]
+                        print(
+                            f"packet seq={sequence} frames={frames} "
+                            f"rtf={elapsed / (frames / SAMPLE_RATE):.3f} "
+                            f"scenario={last['scenario']} roles={last['roles']} "
+                            f"target_db={last['target_gain_db']} "
+                            f"applied_db={last['applied_gain_db_last_frame']}",
+                            flush=True,
+                        )
+                    else:
+                        print(
+                            f"packet seq={sequence} frames={frames} rtf={elapsed / (frames / SAMPLE_RATE):.3f}",
+                            flush=True,
+                        )
                     conn.sendall(raw + output.tobytes())
                 except (EOFError, OSError, ValueError, RuntimeError) as exc:
                     print(f"worker error: {exc}", flush=True)
@@ -445,15 +536,50 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--window-frames", type=int, default=MODEL_FRAMES, help=f"fixed model window (default {MODEL_FRAMES})")
     parser.add_argument("--window-hop", type=int, default=None, help="frames between windows (default = window-frames)")
+    parser.add_argument(
+        "--output-mode",
+        choices=("stem", "envelope"),
+        default=None,
+        help="stem = separated vocal stem (probe); envelope = role-aware per-stem gains for a "
+             "noise scenario + attack/release envelope, remixed into music (product-path proxy). "
+             "Default: $KHADAS_OWS_OUTPUT_MODE or 'stem'.",
+    )
+    parser.add_argument("--scenario", choices=role_strategy.SCENARIOS, default=None,
+                        help="noise scenario for --output-mode envelope (default quiet)")
+    parser.add_argument("--scenario-start-ms", type=float, default=0.0,
+                        help="envelope-mode scenario window start (default 0)")
+    parser.add_argument("--scenario-end-ms", type=float, default=1e9,
+                        help="envelope-mode scenario window end (default whole stream)")
+    parser.add_argument("--strategy-strength", type=float, default=0.6,
+                        help="contrast-only strength for envelope mode (0..1, default 0.6)")
+    parser.add_argument(
+        "--output-gain",
+        choices=("peak", "unity"),
+        default=None,
+        help="peak = historical probe convention (per-packet peak matching, can pump at window "
+             "boundaries); unity = keep the model's own scale (use for listening). "
+             "Default: $KHADAS_OWS_OUTPUT_GAIN or 'peak'.",
+    )
     parser.add_argument("--port", type=int)
     args = parser.parse_args(argv)
 
     backend_name = args.backend or ("torch" if args.mode == "cpu" else "rknnlite")
+    output_gain = args.output_gain or os.environ.get("KHADAS_OWS_OUTPUT_GAIN") or "peak"
+    output_mode = args.output_mode or os.environ.get("KHADAS_OWS_OUTPUT_MODE") or "stem"
+    scenario = args.scenario or os.environ.get("KHADAS_OWS_SCENARIO") or "quiet"
+    if output_gain not in ("peak", "unity"):
+        print(f"error: invalid output gain {output_gain!r} (expected peak|unity)", file=sys.stderr)
+        return 2
     expected_sha = args.model_sha256 or os.environ.get("KHADAS_OWS_MODEL_SHA256")
     port = args.port or (9201 if args.mode == "cpu" else 9202)
     try:
         backend = make_backend(backend_name, args.model, expected_sha)
-        manager = StreamingWindowManager(backend, window_frames=args.window_frames, window_hop=args.window_hop)
+        manager = StreamingWindowManager(
+            backend, window_frames=args.window_frames, window_hop=args.window_hop,
+            output_gain=output_gain, output_mode=output_mode, scenario=scenario,
+            scenario_start_s=args.scenario_start_ms / 1000.0,
+            scenario_end_s=args.scenario_end_ms / 1000.0,
+            strategy_strength=args.strategy_strength)
     except WorkerError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2

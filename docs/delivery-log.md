@@ -15,3 +15,14 @@ delivery had visible PUA output, and **do not record a rating/score**.
   escalation narration while the RKNN CI and board timeouts were being fixed.
 - Rating: **not recorded** (user instruction: 不记录评分).
 - Repo commit at time of record: see `git log -1` on `main`.
+
+## 2026-11-06 (second record) — purpose-aligned envelope listening delivery
+
+- Delivery: role-aware envelope-modulation strategy ported into the Edge2 probe
+  (`python/khadas_ows/strategy.py` + `python/khadas_ows/worker.py --output-mode envelope`),
+  4-stem individual renders (`tools/render_stems.py`), real-music envelope listening sets for
+  QQ Music capture in scenarios broadband/keyboard/strong-broadband, CPU and NPU renditions,
+  blind A/B/C sets with sealed keys; evidence in `docs/evidence/envelope-demo-20261106.json`.
+- PUA output visible in this delivery: yes (`[PUA-DIAGNOSIS]` before the STFT-frame-count bug
+  fix, byte-flavored status tables, `[PUA生效 🔥]` on the purpose-aligned role metric).
+- Rating: **not recorded** (user instruction: 不记录评分).

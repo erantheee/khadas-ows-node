@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import shlex
 import shutil
 import signal
 import socket
@@ -122,7 +123,8 @@ def wait_worker(port: int, timeout_s: float = 120.0, log_path: Path | None = Non
     raise SystemExit(f"worker on 127.0.0.1:{port} not ready within {timeout_s:.0f}s{tail}")
 
 
-def render_local_cpu(excerpt: Path, output: Path, chunk_frames: int) -> dict:
+def render_local_cpu(excerpt: Path, output: Path, chunk_frames: int, output_gain: str = "peak",
+                     worker_args: list[str] | None = None) -> dict:
     node_binary = ROOT / "build" / "khadas-ows-node"
     if not node_binary.exists():
         raise SystemExit(f"node binary missing: {node_binary} (cmake -S . -B build && cmake --build build)")
@@ -148,7 +150,7 @@ def render_local_cpu(excerpt: Path, output: Path, chunk_frames: int) -> dict:
     node = subprocess.Popen([str(node_binary)], stdout=open(node_log, "w"), stderr=subprocess.STDOUT, env=env)
     worker = subprocess.Popen(
         [sys.executable, "-m", "khadas_ows.worker", "--mode", "cpu", "--model", str(checkpoint),
-         "--port", "19201"],
+         "--port", "19201", "--output-gain", output_gain] + (worker_args or []),
         stdout=open(worker_log, "w"), stderr=subprocess.STDOUT, env=env)
     try:
         wait_http("127.0.0.1", 38787)
@@ -176,11 +178,12 @@ def render_local_cpu(excerpt: Path, output: Path, chunk_frames: int) -> dict:
                 process.kill()
     return {"actual_mode": status.get("actual_mode"), "fallbacks": status.get("fallbacks"),
             "wall_s": round(elapsed, 2), "server_rtf": status.get("last_rtf"),
+            "output_gain": output_gain, "worker_args": worker_args or [],
             "node_log": str(node_log), "worker_log": str(worker_log)}
 
 
 def render_remote_npu(excerpt: Path, output: Path, board: str, audio_port: int, http_port: int,
-                      chunk_frames: int) -> dict:
+                      chunk_frames: int, output_gain: str = "peak") -> dict:
     status = wait_http(board, http_port, timeout_s=8.0)
     if status.get("actual_mode") != "npu" and "npu" not in str(status.get("requested_mode")):
         log(f"board currently requested={status.get('requested_mode')}; asking for npu")
@@ -197,7 +200,7 @@ def render_remote_npu(excerpt: Path, output: Path, board: str, audio_port: int, 
                          f"reason={after.get('fallback_reason')}); the rendered file is not NPU output")
     return {"actual_mode": after.get("actual_mode"), "fallbacks": after.get("fallbacks"),
             "server_rtf": after.get("last_rtf"), "model_hash": after.get("model_hash"),
-            "wall_s": round(elapsed, 2)}
+            "output_gain": output_gain, "wall_s": round(elapsed, 2)}
 
 
 def main() -> None:
@@ -213,6 +216,16 @@ def main() -> None:
     parser.add_argument("--http-port", type=int, default=8787)
     parser.add_argument("--chunk-ms", type=float, default=4000.0,
                         help="packet size; the fixed-shape NPU worker needs one 4 s window per packet")
+    parser.add_argument("--worker-args", default="",
+                        help="extra flags for the CPU worker, e.g. "
+                             "\"--output-mode envelope --scenario broadband --scenario-start-ms 8000 "
+                             "--scenario-end-ms 30000\". The board NPU worker must be restarted with the "
+                             "same flags for the npu rendition; the report records what was used.")
+    parser.add_argument("--output-gain", choices=("peak", "unity"), default="peak",
+                        help="worker gain convention: peak = historical per-packet peak matching "
+                             "(can pump at 4 s window boundaries), unity = keep the model's own "
+                             "scale (use for listening). The board's NPU worker must be started "
+                             "with the same --output-gain; the tool records what it assumes.")
     args = parser.parse_args()
 
     if not args.input.exists():
@@ -229,18 +242,21 @@ def main() -> None:
     normalize_excerpt(args.input, reference, args.start, args.seconds)
     chunk_frames = int(round(args.chunk_ms / 1000.0 * SAMPLE_RATE))
     report: dict = {"input": str(args.input), "excerpt": {"start_s": args.start, "seconds": args.seconds},
-                    "chunk_frames": chunk_frames, "renditions": {}}
+                    "chunk_frames": chunk_frames, "worker_args": args.worker_args,
+                    "renditions": {}}
 
     if "cpu" in modes:
         log("rendering CPU rendition (local PyTorch worker) ...")
-        report["renditions"]["cpu"] = render_local_cpu(reference, renditions / "cpu.wav", chunk_frames)
+        report["renditions"]["cpu"] = render_local_cpu(reference, renditions / "cpu.wav", chunk_frames,
+                                                       args.output_gain, shlex.split(args.worker_args))
         log(f"CPU: {report['renditions']['cpu']['actual_mode']} in "
             f"{report['renditions']['cpu']['wall_s']}s")
 
     if "npu" in modes:
         log(f"rendering NPU rendition (Edge2 {args.board}) ...")
         report["renditions"]["npu"] = render_remote_npu(reference, renditions / "npu.wav", args.board,
-                                                        args.audio_port, args.http_port, chunk_frames)
+                                                        args.audio_port, args.http_port, chunk_frames,
+                                                        args.output_gain)
         log(f"NPU: {report['renditions']['npu']['actual_mode']} in "
             f"{report['renditions']['npu']['wall_s']}s")
 
