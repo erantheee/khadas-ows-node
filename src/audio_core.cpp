@@ -148,6 +148,22 @@ int run_http_server(AudioCore& core, std::uint16_t port) {
         const int client = ::accept(server, nullptr, nullptr); if (client < 0) continue;
         char buffer[4096]{}; const auto n = ::recv(client, buffer, sizeof(buffer) - 1, 0);
         std::string request(buffer, n > 0 ? static_cast<std::size_t>(n) : 0), body; int code = 200;
+        const auto header_end = request.find("\r\n\r\n");
+        if (header_end != std::string::npos) {
+            std::size_t content_length = 0;
+            const auto length_at = request.find("Content-Length:");
+            if (length_at != std::string::npos && length_at < header_end) {
+                const auto value_at = length_at + std::strlen("Content-Length:");
+                const auto value_end = request.find("\r\n", value_at);
+                try { content_length = static_cast<std::size_t>(std::stoul(request.substr(value_at, value_end - value_at))); }
+                catch (const std::exception&) { content_length = 0; }
+            }
+            const auto have = request.size() - (header_end + 4);
+            if (content_length > have) {
+                std::string remainder(content_length - have, '\0');
+                if (read_all(client, remainder.data(), remainder.size())) request += remainder;
+            }
+        }
         if (request.rfind("GET /v1/status ", 0) == 0) body = core.status_json();
         else if (request.rfind("POST /v1/mode ", 0) == 0) {
             const auto pos = request.find("\r\n\r\n"); const auto payload = pos == std::string::npos ? "" : request.substr(pos + 4);
