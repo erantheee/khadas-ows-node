@@ -1,0 +1,10 @@
+{
+  "status": "quarantine",
+  "source_repo": "erantheee/cores3-noise-adapt-demo",
+  "source_path": "work/stem-ab/runs/band_split_musdb.pt",
+  "source_checkpoint_sha256": "0989b29332a3fe710be85f9c168691b11460e8b8a16df35f3c4cafccaeb745de",
+  "architecture": {"name": "MaskNetwork", "base": 128, "layers": 6, "stems": 4},
+  "known_summary": {"vocals_sdr_db": -0.16, "drums_sdr_db": 0.06, "bass_sdr_db": -0.30, "other_sdr_db": 1.02},
+  "limitations": ["training completion not independently established", "no ONNX/RKNN/Edge2 result yet", "listening quality not accepted"]
+}
+

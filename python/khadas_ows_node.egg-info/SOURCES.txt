@@ -1,0 +1,10 @@
+README.md
+pyproject.toml
+python/khadas_ows/model.py
+python/khadas_ows/worker.py
+python/khadas_ows_node.egg-info/PKG-INFO
+python/khadas_ows_node.egg-info/SOURCES.txt
+python/khadas_ows_node.egg-info/dependency_links.txt
+python/khadas_ows_node.egg-info/requires.txt
+python/khadas_ows_node.egg-info/top_level.txt
+tests/test_model.py

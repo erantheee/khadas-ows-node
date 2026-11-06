@@ -1,0 +1,13 @@
+build/
+.venv/
+__pycache__/
+.pytest_cache/
+*.pyc
+*.pt
+*.pth
+*.onnx
+*.onnx.data
+*.rknn
+*.wav
+*.raw
+

@@ -1,0 +1,18 @@
+schema: 1
+project: khadas-ows-node
+items:
+  - path: models/quarantine/candidate-v0.manifest.json
+    source_repo: erantheee/cores3-noise-adapt-demo
+    source_path: work/stem-ab/runs/band_split_musdb.pt
+    source_commit: f896df7
+    migration: artifact-reference-only
+    note: Binary checkpoint is ignored by Git and remains quarantined until Edge2 validation.
+  - path: include/khadas_ows/policy.hpp
+    source_repo: erantheee/cores3-noise-adapt-demo
+    source_paths:
+      - main/controller.hpp
+      - main/conversation_awareness.hpp
+    source_commit: f896df7
+    migration: clean-room-minimal-rewrite
+    note: Preserves only the 0.5 s preview, 0.8 s confirmation and fail-closed identity semantics needed by this demo.
+
