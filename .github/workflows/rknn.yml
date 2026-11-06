@@ -15,6 +15,11 @@ name: rknn-convert
 on:
   workflow_dispatch:
   workflow_call:
+  # Iterator trigger: GitHub only exposes workflow_dispatch for workflows that
+  # already exist on the default branch, and this branch must be green before the
+  # lead merges it. Remove once the workflow is on main (dispatch then works).
+  push:
+    branches: [npu/rknn-ci]
 
 permissions:
   contents: read
