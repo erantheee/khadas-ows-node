@@ -195,6 +195,16 @@ bool read_number_field(const std::string& body, const char* key, float& value) {
     return true;
 }
 
+bool read_string_field(const std::string& body, const char* key, std::string& value) {
+    std::size_t pos = 0;
+    if (!json_value_position(body, key, pos)) return true; // absent keeps the default
+    if (pos >= body.size() || body[pos] != '"') return false;
+    const auto end = body.find('"', pos + 1);
+    if (end == std::string::npos) return false;
+    value = body.substr(pos + 1, end - pos - 1);
+    return true;
+}
+
 bool skip_whitespace(const std::string& text, std::size_t& pos) {
     while (pos < text.size() && std::isspace(static_cast<unsigned char>(text[pos])) != 0) ++pos;
     return pos < text.size();
@@ -286,6 +296,10 @@ bool parse_evidence_json(const std::string& body, conversation::Evidence& eviden
     if (!read_number_field(body, "level_dbfs", evidence.level_dbfs)) return false;
     if (!read_bool_field(body, "event_blocked", evidence.event_blocked)) return false;
     if (!read_bool_field(body, "dialogue_veto", evidence.dialogue_veto)) return false;
+    if (!read_string_field(body, "event", evidence.event)) return false;
+    if (!read_string_field(body, "environment", evidence.environment)) return false;
+    if (!read_string_field(body, "context", evidence.context)) return false;
+    if (!read_number_field(body, "context_score", evidence.context_score)) return false;
     if (!read_number_field(body, "elapsed_ms", dt_ms)) return false;
     if (!read_number_field(body, "dt_ms", dt_ms)) return false;
     dt_ms = std::clamp(dt_ms, 0.0f, 1000.0f);
@@ -448,6 +462,13 @@ conversation::Output AudioCore::ingest_evidence(const conversation::Evidence& ev
     status_.engaged = policy_.engaged;
     status_.ambient_intent = policy_.ambient_open;
     status_.media_percent = policy_.media_percent;
+    status_.dmic_level_dbfs = evidence.level_dbfs;
+    status_.dmic_voice_likelihood = evidence.voice_likelihood;
+    status_.dmic_speech_active = evidence.speech_active;
+    status_.dmic_event = evidence.event;
+    status_.dmic_environment = evidence.environment;
+    status_.dmic_context = evidence.context;
+    status_.dmic_context_score = evidence.context_score;
     ++status_.evidence_frames;
     last_evidence_at_ = std::chrono::steady_clock::now();
     has_evidence_ = true;
@@ -456,6 +477,27 @@ conversation::Output AudioCore::ingest_evidence(const conversation::Evidence& ev
                                    last_evidence_at_ - started_at_)
                                    .count();
     return policy_;
+}
+
+void AudioCore::refresh_evidence_staleness_locked() {
+    // Fail-open: evidence arrives from an out-of-process HTTP producer. If that producer
+    // stalls or dies while the policy is not idle, holding the last duck forever would leave
+    // the media attenuated with no recovery. Release to idle/100% and let the existing gain
+    // ramp restore the audio; the next process() block is bit-exact again. Stale evidence is
+    // never re-used: the state machine needs fresh frames to re-engage.
+    const bool policy_active = policy_.state != conversation::State::idle;
+    if (policy_active && has_evidence_ &&
+        std::chrono::steady_clock::now() - last_evidence_at_ >
+            std::chrono::milliseconds(evidence_ttl_ms_)) {
+        awareness_.reset();
+        policy_ = conversation::Output{};
+        status_.policy_state = policy_.state;
+        status_.engaged = policy_.engaged;
+        status_.ambient_intent = policy_.ambient_open;
+        status_.media_percent = policy_.media_percent;
+        status_.evidence_stale = true;
+        ++status_.evidence_stale_events;
+    }
 }
 
 bool AudioCore::call_worker(Mode mode, const PacketHeader& header, const std::vector<float>& input,
@@ -595,30 +637,19 @@ std::vector<float> AudioCore::process(const PacketHeader& header, const std::vec
     }
     {
         std::lock_guard lock(mutex_);
-        // Fail-open: evidence arrives from an out-of-process HTTP producer. If that producer
-        // stalls or dies while the policy is not idle, holding the last duck forever would leave
-        // the media attenuated with no recovery. Release to idle/100% and let the existing gain
-        // ramp restore the audio; the following process() block is bit-exact again. Stale
-        // evidence is never re-used: the state machine needs fresh frames to re-engage.
-        const bool policy_active = policy_.state != conversation::State::idle;
-        if (policy_active && has_evidence_ &&
-            std::chrono::steady_clock::now() - last_evidence_at_ >
-                std::chrono::milliseconds(evidence_ttl_ms_)) {
-            awareness_.reset();
-            policy_ = conversation::Output{};
-            status_.policy_state = policy_.state;
-            status_.engaged = policy_.engaged;
-            status_.ambient_intent = policy_.ambient_open;
-            status_.media_percent = policy_.media_percent;
-            status_.evidence_stale = true;
-            ++status_.evidence_stale_events;
-        }
+        // Fail-open on stalled evidence; shared with status_json() so a status poll can release
+        // the duck even when no audio packet is flowing.
+        refresh_evidence_staleness_locked();
         apply_duck_gain_locked(result);
     }
     return result;
 }
 
-std::string AudioCore::status_json() const {
+std::string AudioCore::status_json() {
+    {
+        std::lock_guard lock(mutex_);
+        refresh_evidence_staleness_locked();
+    }
     const auto snapshot = status();
     std::int64_t evidence_age_ms = -1;
     if (snapshot.last_evidence_ms >= 0) {
@@ -643,7 +674,14 @@ std::string AudioCore::status_json() const {
         << ",\"last_evidence_age_ms\":" << evidence_age_ms
         << ",\"evidence_stale\":" << (snapshot.evidence_stale ? "true" : "false")
         << ",\"evidence_ttl_ms\":" << snapshot.evidence_ttl_ms
-        << ",\"evidence_stale_events\":" << snapshot.evidence_stale_events << "}";
+        << ",\"evidence_stale_events\":" << snapshot.evidence_stale_events
+        << ",\"dmic_level_dbfs\":" << snapshot.dmic_level_dbfs
+        << ",\"dmic_voice_likelihood\":" << snapshot.dmic_voice_likelihood
+        << ",\"dmic_speech_active\":" << (snapshot.dmic_speech_active ? "true" : "false")
+        << ",\"dmic_event\":\"" << snapshot.dmic_event << "\""
+        << ",\"dmic_environment\":\"" << snapshot.dmic_environment << "\""
+        << ",\"dmic_context\":\"" << snapshot.dmic_context << "\""
+        << ",\"dmic_context_score\":" << snapshot.dmic_context_score << "}";
     return out.str();
 }
 

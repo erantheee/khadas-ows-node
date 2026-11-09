@@ -7,6 +7,7 @@
 // timeline (tests/w1_timeline_golden.h) keeps its zero-false-confirmation result.
 
 #include <cstdint>
+#include <string>
 
 /// 对话感知：**预判式**让位，而不是事后反应。
 ///
@@ -42,6 +43,13 @@ struct Evidence {
     /// 否则同一段连续电视/播客语音下一拍又会把状态机顶回 engaged。TTL 由 app_main
     /// 按控制行 `dialog no|yes [ttl_ms]` 维护。
     bool dialogue_veto = false;
+    /// 板端事件判断结果（quiet/speech/keyboard/wind）与环境分类（QUIET/NOISY/VOICE/LOUD）。
+    /// 策略只消费 event_blocked；这两个字符串是状态载体，供上位机显示，不参与决策。
+    std::string event = "quiet";
+    std::string environment = "QUIET";
+    /// 板端 9 类情境模型输出（listening_model v0.2-s3）；空/unknown 表示没有有效输出。
+    std::string context = "unknown";
+    float context_score = 0.0f;
 };
 
 /// 触发与时序参数集中在这里，便于按实测一次性标定。

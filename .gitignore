@@ -32,3 +32,6 @@ docs/listening-material/**/*.wav
 
 # macOS folder metadata
 .DS_Store
+
+# Local labeled captures (2026-11-09 onboarding)
+记录/

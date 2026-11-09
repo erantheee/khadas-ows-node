@@ -58,6 +58,16 @@ struct Status {
     bool evidence_stale = false;
     int evidence_ttl_ms = 2000;
     std::uint64_t evidence_stale_events = 0;
+    // Latest on-board DMIC evidence (the PDM producer posts these through /v1/evidence).
+    // -120 dBFS / 0.0 / false mean "no evidence frame yet"; they are never re-invented here.
+    float dmic_level_dbfs = -120.0f;
+    float dmic_voice_likelihood = 0.0f;
+    bool dmic_speech_active = false;
+    /// Latest on-board event/environment labels (same evidence frame as above).
+    std::string dmic_event = "quiet";
+    std::string dmic_environment = "QUIET";
+    std::string dmic_context = "unknown";
+    float dmic_context_score = 0.0f;
 };
 
 class AudioCore {
@@ -74,7 +84,10 @@ public:
     /// honoured as-is (tests pass short timeouts to exercise the timeout path on purpose).
     std::vector<float> process(const PacketHeader& header, const std::vector<float>& input,
                                int timeout_ms = 0);
-    std::string status_json() const;
+    /// Non-const on purpose: refreshes the evidence-staleness fail-safe first, so a status
+    /// poll alone can release a duck whose evidence producer died (there may be no audio
+    /// packet flowing through process() at that moment).
+    std::string status_json();
     /// Ingests one control-rate evidence frame (dt_ms defaults to the 100 ms control period) and
     /// advances the ported legacy conversation state machine. Returns the new policy output.
     conversation::Output ingest_evidence(const conversation::Evidence& evidence,
@@ -90,6 +103,9 @@ private:
     /// target changes cannot click/zipper. Bit-exact bypass (no multiplies) when the policy is
     /// idle and the applied gain is already unity.
     void apply_duck_gain_locked(std::vector<float>& block);
+    /// Releases a non-idle policy to idle/100% once the last evidence frame is older than
+    /// evidence_ttl_ms. Caller must hold mutex_.
+    void refresh_evidence_staleness_locked();
     mutable std::mutex mutex_;
     RingBuffer<float> ring_;
     Status status_;
