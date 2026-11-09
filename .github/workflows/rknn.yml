@@ -17,6 +17,11 @@ name: rknn-convert
 
 on:
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Release tag containing candidate-v0.onnx (default models-v0)"
+        required: false
+        default: "models-v0"
   workflow_call:
 
 permissions:
@@ -90,7 +95,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p artifacts reports
-          gh release download models-v0 \
+          gh release download "${{ inputs.release_tag || 'models-v0' }}" \
             --repo "${GITHUB_REPOSITORY}" \
             --pattern 'candidate-v0.onnx' \
             --pattern 'candidate-v0.onnx.data' \
