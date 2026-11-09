@@ -40,6 +40,7 @@ import os
 import socket
 import struct
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -336,6 +337,12 @@ class StreamingWindowManager:
             node_status=board_tuning.NodeStatusReader(node_status_url))
         self.frame_gains = np.zeros(board_tuning.BAND_COUNT, dtype=np.float64)
         self.last_tuning: dict = {"mode": "FLAT", "stale": True}
+        # 10 Hz control loop: the tuner decision cadence is decoupled from the 1 s audio
+        # packet cadence, so a noise/event change reaches the Mac in ~100 ms instead of
+        # waiting for the next 0.9 s hop (user feedback: change latency must match S3).
+        self.latest_features: tuple | None = None
+        self._features_lock = threading.Lock()
+        self._control_started = False
         self.samples_processed = 0
         self.role_history: list[dict] = []
         self.window_frames = int(window_frames)
@@ -433,19 +440,10 @@ class StreamingWindowManager:
         """
         stft_frames = int(masks.shape[-1])
         content_bands, shares = self.tuner.content_features(spectrum, masks)
-        evidence = self.tuner.evidence.read() or {}
-        status = self.tuner.node_status.read()
-        result = self.tuner.step(
-            level_dbfs=evidence.get("level_dbfs"),
-            ambient_bands=evidence.get("band_dbfs"),
-            event=evidence.get("event"),
-            voice=float(evidence.get("voice_likelihood") or 0.0),
-            conversation=status.get("policy_state"),
-            content_bands=content_bands,
-            stem_shares=shares,
-            dt_s=(self.window_hop * HOP) / SAMPLE_RATE,
-        )
-        target = np.asarray(result["applied_db"], dtype=np.float64)
+        with self._features_lock:
+            self.latest_features = (content_bands, shares)
+        self.start_control_loop()
+        target = np.asarray(self.tuner.applied_db, dtype=np.float64)
         dt_frame = HOP / SAMPLE_RATE
         gains_db = np.zeros((stft_frames, board_tuning.BAND_COUNT), dtype=np.float64)
         current = self.frame_gains.copy()
@@ -463,6 +461,10 @@ class StreamingWindowManager:
         peak = float(np.max(np.abs(remixed)))
         if peak > board_tuning.OUTPUT_PEAK_LIMIT:
             remixed = remixed * (board_tuning.OUTPUT_PEAK_LIMIT / peak)
+        return remixed.T
+
+    def _publish_tuning(self, result: dict) -> None:
+        target = np.asarray(result["applied_db"], dtype=np.float64)
         self.last_tuning = {
             "mode": result.get("mode", "FLAT"),
             "style": result.get("style", "?"),
@@ -474,7 +476,6 @@ class StreamingWindowManager:
             "exposure": round(float(result.get("exposure", 0.0)), 3),
             "band_db": [round(float(v), 2) for v in target],
         }
-        # Telemetry for the node status / Mac panel: what the board actually did.
         try:
             path = Path("/tmp/tuning-latest.json")
             writing = path.with_suffix(".writing")
@@ -483,7 +484,37 @@ class StreamingWindowManager:
             os.replace(writing, path)
         except OSError:
             pass
-        return remixed.T
+
+    def _control_loop(self) -> None:
+        """10 Hz: DMIC evidence + latest content features -> tuner -> telemetry."""
+        while True:
+            try:
+                with self._features_lock:
+                    features = self.latest_features
+                if features is not None:
+                    content_bands, shares = features
+                    evidence = self.tuner.evidence.read() or {}
+                    status = self.tuner.node_status.read()
+                    result = self.tuner.step(
+                        level_dbfs=evidence.get("level_dbfs"),
+                        ambient_bands=evidence.get("band_dbfs"),
+                        event=evidence.get("event"),
+                        voice=float(evidence.get("voice_likelihood") or 0.0),
+                        conversation=status.get("policy_state"),
+                        content_bands=content_bands,
+                        stem_shares=shares,
+                        dt_s=0.1,
+                    )
+                    self._publish_tuning(result)
+            except Exception:  # noqa: BLE001 - control loop must never kill audio
+                pass
+            time.sleep(0.1)
+
+    def start_control_loop(self) -> None:
+        if self._control_started:
+            return
+        self._control_started = True
+        threading.Thread(target=self._control_loop, name="tuning-control", daemon=True).start()
 
     def _envelope_output(self, spectrum: np.ndarray, masks: np.ndarray, pcm_frames: int) -> np.ndarray:
         """Stems -> dominant roles -> scenario gains -> envelope-shaped remix.
