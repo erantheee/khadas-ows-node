@@ -475,6 +475,10 @@ class StreamingWindowManager:
             "masking_peak_db": round(float(np.max(result["masking_db"])), 2),
             "exposure": round(float(result.get("exposure", 0.0)), 3),
             "band_db": [round(float(v), 2) for v in target],
+            "device_db": [round(float(v), 2)
+                          for v in np.asarray(result.get("device_db", target))],
+            "masking_db": [round(float(v), 2)
+                           for v in np.asarray(result.get("masking_db", np.zeros(24)))],
         }
         try:
             path = Path("/tmp/tuning-latest.json")
