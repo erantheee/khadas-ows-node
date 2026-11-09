@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import json
 import os
 import socket
 import struct
@@ -473,6 +474,15 @@ class StreamingWindowManager:
             "exposure": round(float(result.get("exposure", 0.0)), 3),
             "band_db": [round(float(v), 2) for v in target],
         }
+        # Telemetry for the node status / Mac panel: what the board actually did.
+        try:
+            path = Path("/tmp/tuning-latest.json")
+            writing = path.with_suffix(".writing")
+            writing.write_text(json.dumps({"ts_ms": int(time.time() * 1000), **self.last_tuning},
+                                          ensure_ascii=False), encoding="utf-8")
+            os.replace(writing, path)
+        except OSError:
+            pass
         return remixed.T
 
     def _envelope_output(self, spectrum: np.ndarray, masks: np.ndarray, pcm_frames: int) -> np.ndarray:

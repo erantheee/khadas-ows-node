@@ -8,6 +8,9 @@
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <poll.h>
@@ -404,6 +407,34 @@ void handle_http_client(AudioCore& core, int fd) {
     write_all(fd, response.data(), response.size());
 }
 
+std::string read_tuning_telemetry_json() {
+    namespace fs = std::filesystem;
+    constexpr const char* path = "/tmp/tuning-latest.json";
+    std::error_code error;
+    const auto modified = fs::last_write_time(path, error);
+    if (error) return {};
+    const auto age = fs::file_time_type::clock::now() - modified;
+    if (age > std::chrono::seconds(5)) return {};
+    std::ifstream file(path, std::ios::binary);
+    if (!file) return {};
+    std::string content((std::istreambuf_iterator<char>(file)),
+                        std::istreambuf_iterator<char>());
+    auto not_space = [](unsigned char value) {
+        return !std::isspace(value);
+    };
+    while (!content.empty() && !not_space(static_cast<unsigned char>(content.back()))) {
+        content.pop_back();
+    }
+    const auto first = std::find_if(content.begin(), content.end(),
+                                    [&](char value) { return not_space(static_cast<unsigned char>(value)); });
+    content.erase(content.begin(), first);
+    if (content.size() < 2 || content.front() != '{' || content.back() != '}') return {};
+    for (char& value : content) {
+        if (value == '\n' || value == '\r') value = ' ';
+    }
+    return content;
+}
+
 } // namespace
 
 WorkerPorts WorkerPorts::from_env() {
@@ -681,7 +712,10 @@ std::string AudioCore::status_json() {
         << ",\"dmic_event\":\"" << snapshot.dmic_event << "\""
         << ",\"dmic_environment\":\"" << snapshot.dmic_environment << "\""
         << ",\"dmic_context\":\"" << snapshot.dmic_context << "\""
-        << ",\"dmic_context_score\":" << snapshot.dmic_context_score << "}";
+        << ",\"dmic_context_score\":" << snapshot.dmic_context_score;
+    const std::string tuning = read_tuning_telemetry_json();
+    if (!tuning.empty()) out << ",\"tuning\":" << tuning;
+    out << "}";
     return out.str();
 }
 
