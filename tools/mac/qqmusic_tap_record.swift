@@ -62,11 +62,19 @@ var processAddress = AudioObjectPropertyAddress(
     mElement: kAudioObjectPropertyElementMain)
 var processID = AudioObjectID(kAudioObjectUnknown)
 var processSize = UInt32(MemoryLayout<AudioObjectID>.size)
-let processStatus = AudioObjectGetPropertyData(
-    AudioObjectID(kAudioObjectSystemObject), &processAddress,
-    UInt32(MemoryLayout<pid_t>.size), &pidValue, &processSize, &processID)
+var processStatus = OSStatus(kAudioHardwareUnspecifiedError)
+let processDeadline = Date().addingTimeInterval(waitAudioSeconds)
+repeat {
+    processID = AudioObjectID(kAudioObjectUnknown)
+    processSize = UInt32(MemoryLayout<AudioObjectID>.size)
+    processStatus = AudioObjectGetPropertyData(
+        AudioObjectID(kAudioObjectSystemObject), &processAddress,
+        UInt32(MemoryLayout<pid_t>.size), &pidValue, &processSize, &processID)
+    if processStatus == noErr, processID != kAudioObjectUnknown { break }
+    RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+} while Date() < processDeadline
 guard processStatus == noErr, processID != kAudioObjectUnknown else {
-    fail(3, "PROCESS_OBJECT_NOT_FOUND status=\(processStatus)")
+    fail(3, "PROCESS_OBJECT_NOT_FOUND status=\(processStatus) within \(Int(waitAudioSeconds))s")
 }
 print("audio_process_id=\(processID)")
 
