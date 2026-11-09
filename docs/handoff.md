@@ -1,5 +1,11 @@
 # Handoff — khadas-ows-node (2026-11-06)
 
+> 2026-11-09 availability recheck: `khadas.local` resolved to `172.16.20.18`; SSH and
+> the existing FP16 NPU services were healthy. A fresh 20-second network stream passed
+> 5/5 chunks with zero fallbacks/reconnects/deadline misses and `actual_mode=npu`.
+> See `docs/evidence/board-recheck-20261109.md`. The 30-minute acceptance evidence below
+> remains the engineering soak of record.
+
 Read `README.md` for the architecture and `docs/proposal.md` for the frozen scope.
 This file is the current state: what was verified, how, on which objects, and what is next.
 
