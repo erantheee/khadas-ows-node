@@ -26,7 +26,7 @@ import torch
 SR = 44100
 N_FFT = 2048
 HOP = 512
-FRAMES = 345  # 4 s window at hop 512, matching the exported ONNX shape
+DEFAULT_FRAMES = 345  # 4 s window at hop 512, matching the default exported ONNX shape
 SEED = 20261106
 
 
@@ -70,13 +70,13 @@ def _near_silence(rng: np.random.Generator, n: int) -> np.ndarray:
     return rng.normal(0, 1e-3, (2, n))
 
 
-def magnitude(audio: np.ndarray) -> np.ndarray:
+def magnitude(audio: np.ndarray, frames: int = DEFAULT_FRAMES) -> np.ndarray:
     x = torch.from_numpy(audio.astype(np.float32))
     window = torch.hann_window(N_FFT)
     spec = torch.stft(x, n_fft=N_FFT, hop_length=HOP, window=window, return_complex=True)
-    mag = spec.abs()[:, :, :FRAMES].numpy().astype(np.float32)
-    if mag.shape[-1] < FRAMES:  # defensive; 4 s always yields 345 frames
-        mag = np.pad(mag, ((0, 0), (0, 0), (0, FRAMES - mag.shape[-1])))
+    mag = spec.abs()[:, :, :frames].numpy().astype(np.float32)
+    if mag.shape[-1] < frames:  # defensive; a 4 s packet always yields the full window
+        mag = np.pad(mag, ((0, 0), (0, 0), (0, frames - mag.shape[-1])))
     return mag[None, ...]
 
 
@@ -84,6 +84,7 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--output-dir", required=True)
     parser.add_argument("--count", type=int, default=8)
+    parser.add_argument("--frames", type=int, default=DEFAULT_FRAMES, help="STFT frames per calibration sample (default 345 = 4 s)")
     args = parser.parse_args()
     rng = np.random.default_rng(SEED)
     output = Path(args.output_dir)
@@ -94,7 +95,7 @@ def main() -> None:
         builder = builders[index % len(builders)]
         audio = builder(rng, 4 * SR)
         scale = 10 ** rng.uniform(-1.0, 0.2)
-        mag = magnitude(audio * scale)
+        mag = magnitude(audio * scale, args.frames)
         path = output / f"calib_{index:02d}.npy"
         np.save(path, mag)
         entries.append(
@@ -112,13 +113,13 @@ def main() -> None:
         "purpose": "RKNN INT8 calibration for MaskNetwork magnitude input",
         "probe_only": True,
         "stft": {"n_fft": N_FFT, "hop": HOP, "center": True, "window": "hann"},
-        "frames": FRAMES,
+        "frames": args.frames,
         "seed": SEED,
         "count": len(entries),
         "entries": entries,
     }
     (output / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
-    print(json.dumps({"output": str(output), "count": len(entries), "shape": list(magnitude(_music(rng, 4 * SR)).shape)}))
+    print(json.dumps({"output": str(output), "count": len(entries), "shape": list(magnitude(_music(rng, 4 * SR), args.frames).shape)}))
 
 
 if __name__ == "__main__":

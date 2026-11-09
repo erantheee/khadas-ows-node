@@ -22,6 +22,10 @@ on:
         description: "Release tag containing candidate-v0.onnx (default models-v0)"
         required: false
         default: "models-v0"
+      frames:
+        description: "Time frames of the fixed-shape window (345 = 4 s, 88 = 1 s)"
+        required: false
+        default: "345"
   workflow_call:
 
 permissions:
@@ -107,6 +111,7 @@ jobs:
         run: |
           set -euo pipefail
           python tools/verify_onnx.py \
+            --frames "${{ inputs.frames || '345' }}" \
             --onnx artifacts/candidate-v0.onnx \
             --sha256sums artifacts/SHA256SUMS \
             --report reports/candidate-v0.onnx.json
@@ -114,13 +119,14 @@ jobs:
       - name: Generate deterministic INT8 calibration set
         run: |
           set -euo pipefail
-          python tools/make_calibration.py --output-dir models/calib
+          python tools/make_calibration.py --output-dir models/calib --frames "${{ inputs.frames || '345' }}"
           echo "calibration entries: $(wc -l < models/calib/dataset.txt)"
 
       - name: Convert fp16 (non-quantised) RKNN
         run: |
           set -euo pipefail
           python tools/convert_rknn.py \
+            --frames "${{ inputs.frames || '345' }}" \
             --onnx artifacts/candidate-v0.onnx \
             --output models/candidate-v0.fp.rknn \
             --no-quant --verbose \
@@ -130,6 +136,7 @@ jobs:
         run: |
           set -euo pipefail
           python tools/convert_rknn.py \
+            --frames "${{ inputs.frames || '345' }}" \
             --onnx artifacts/candidate-v0.onnx \
             --output models/candidate-v0.int8.rknn \
             --dataset models/calib/dataset.txt --verbose \
@@ -141,6 +148,7 @@ jobs:
           # load_rknn() artifacts cannot run in the PC simulator, so rebuild the same
           # graph with the same flags in-process and verify that in the simulator.
           python tools/verify_rknn.py \
+            --frames "${{ inputs.frames || '345' }}" \
             --onnx artifacts/candidate-v0.onnx \
             --rknn models/candidate-v0.fp.rknn \
             --no-quant \
@@ -152,6 +160,7 @@ jobs:
         run: |
           set -euo pipefail
           python tools/verify_rknn.py \
+            --frames "${{ inputs.frames || '345' }}" \
             --onnx artifacts/candidate-v0.onnx \
             --rknn models/candidate-v0.int8.rknn \
             --dataset models/calib/dataset.txt --quantized \

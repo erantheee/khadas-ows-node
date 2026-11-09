@@ -99,14 +99,14 @@ def _cosine(a: np.ndarray, b: np.ndarray) -> float:
     return float(np.dot(a, b) / denominator)
 
 
-def _canonical_output(value) -> tuple[np.ndarray | None, str]:
-    """Normalise a simulator output array to [1,4,1025,345] if possible."""
+def _canonical_output(value, input_shape=INPUT_SHAPE, output_shape=OUTPUT_SHAPE) -> tuple[np.ndarray | None, str]:
+    """Normalise a simulator output array to the expected [1,4,1025,T] layout if possible."""
     array = np.asarray(value, dtype=np.float32)
-    if array.shape == OUTPUT_SHAPE:
+    if array.shape == output_shape:
         return array, "nchw"
-    if array.shape == (OUTPUT_SHAPE[0], INPUT_SHAPE[2], INPUT_SHAPE[3], STEMS):
+    if array.shape == (output_shape[0], input_shape[2], input_shape[3], STEMS):
         return array.transpose(0, 3, 1, 2), "nhwc->nchw"
-    if array.shape == (STEMS, INPUT_SHAPE[2], INPUT_SHAPE[3]):
+    if array.shape == (STEMS, input_shape[2], input_shape[3]):
         return array[None, ...], "chw->nchw"
     return None, f"unexpected shape {array.shape}"
 
@@ -118,7 +118,8 @@ def _onnx_reference(onnx_path: Path, sample: np.ndarray) -> np.ndarray:
     return session.run(None, {session.get_inputs()[0].name: sample})[0].astype(np.float32)
 
 
-def probe_simulator(rknn, sample: np.ndarray, reference: np.ndarray) -> list[dict]:
+def probe_simulator(rknn, sample: np.ndarray, reference: np.ndarray,
+                    input_shape=INPUT_SHAPE, output_shape=OUTPUT_SHAPE) -> list[dict]:
     """Try plausible input-format conventions and score each against the reference."""
     variants = [
         ("nchw", sample, ["nchw"]),
@@ -140,7 +141,7 @@ def probe_simulator(rknn, sample: np.ndarray, reference: np.ndarray) -> list[dic
             attempt["error"] = "simulator returned no outputs"
             attempts.append(attempt)
             continue
-        canonical, layout = _canonical_output(outputs[0])
+        canonical, layout = _canonical_output(outputs[0], input_shape, output_shape)
         attempt["output_shape"] = list(np.asarray(outputs[0]).shape)
         attempt["layout"] = layout
         if canonical is None:
@@ -204,6 +205,9 @@ def markdown_summary(report: dict) -> str:
 
 
 def run(args: argparse.Namespace) -> dict:
+    frames = max(1, int(getattr(args, "frames", INPUT_SHAPE[3]) or INPUT_SHAPE[3]))
+    input_shape = (INPUT_SHAPE[0], INPUT_SHAPE[1], INPUT_SHAPE[2], frames)
+    output_shape = (OUTPUT_SHAPE[0], OUTPUT_SHAPE[1], OUTPUT_SHAPE[2], frames)
     onnx_path = Path(args.onnx)
     if not onnx_path.is_file():
         raise VerifyError(f"ONNX model not found: {onnx_path}")
@@ -284,19 +288,19 @@ def run(args: argparse.Namespace) -> dict:
     }
 
     try:
-        report.update(prepare_onnx(onnx_path, work_dir))
+        report.update(prepare_onnx(onnx_path, work_dir, frames=frames))
         inlined = Path(report["inlined_onnx"])
         rng = np.random.default_rng(args.seed)
-        sample = rng.random(INPUT_SHAPE, dtype=np.float32)
+        sample = rng.random(input_shape, dtype=np.float32)
         report["input"] = {
-            "shape": list(INPUT_SHAPE),
+            "shape": list(input_shape),
             "seed": args.seed,
             "sha256": hashlib.sha256(sample.tobytes()).hexdigest(),
         }
 
         reference = _onnx_reference(onnx_path, sample)
-        if tuple(reference.shape) != OUTPUT_SHAPE:
-            raise VerifyError(f"ONNX reference output shape {reference.shape}; expected {OUTPUT_SHAPE}")
+        if tuple(reference.shape) != output_shape:
+            raise VerifyError(f"ONNX reference output shape {reference.shape}; expected {output_shape}")
         report["onnx_reference_output_shape"] = list(reference.shape)
 
         rebuilt_export = work_dir / f"candidate-v0.{precision}.rebuilt.rknn"
@@ -335,7 +339,7 @@ def run(args: argparse.Namespace) -> dict:
             result = rknn.init_runtime()
             if result != 0:
                 raise VerifyError(f"RKNN.init_runtime (simulator) failed with return code {result}")
-            attempts = probe_simulator(rknn, sample, reference)
+            attempts = probe_simulator(rknn, sample, reference, input_shape, output_shape)
             report["input_attempts"] = attempts
             usable = [attempt for attempt in attempts if "cosine_similarity" in attempt]
             if not usable:
@@ -347,7 +351,7 @@ def run(args: argparse.Namespace) -> dict:
             report["input_convention"] = best["variant"]
             report["metrics"] = {
                 "output_shape": best["output_shape"],
-                "canonical_output_shape": list(OUTPUT_SHAPE),
+                "canonical_output_shape": list(output_shape),
                 "cosine_similarity": best["cosine_similarity"],
                 "max_abs_error": best["max_abs_error"],
                 "mean_abs_error": best["mean_abs_error"],
@@ -365,8 +369,8 @@ def run(args: argparse.Namespace) -> dict:
 
     metrics = report["metrics"]
     failures = []
-    if metrics["output_shape"] != list(OUTPUT_SHAPE):
-        failures.append(f"output shape {metrics['output_shape']} != {list(OUTPUT_SHAPE)}")
+    if metrics["output_shape"] != list(output_shape):
+        failures.append(f"output shape {metrics['output_shape']} != {list(output_shape)}")
     if metrics["cosine_similarity"] < thresholds["cosine_min"]:
         failures.append(
             f"cosine {metrics['cosine_similarity']:.8f} < {thresholds['cosine_min']} (max_abs {metrics['max_abs_error']:.3e})"
@@ -396,6 +400,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--dataset", help="calibration dataset.txt used by the INT8 conversion")
     parser.add_argument("--report", help="write the JSON parity report here")
     parser.add_argument("--summary", help="write a markdown table (for $GITHUB_STEP_SUMMARY) here")
+    parser.add_argument("--frames", type=int, default=INPUT_SHAPE[3], help="time frames of the fixed-shape window (default 345 = 4 s)")
     parser.add_argument("--seed", type=int, default=DEFAULT_SEED, help="RNG seed for the fixed test input")
     parser.add_argument("--verbose", action="store_true", help="pass verbose=True to RKNN-Toolkit2")
     args = parser.parse_args(argv)

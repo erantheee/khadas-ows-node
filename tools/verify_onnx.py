@@ -87,6 +87,9 @@ def _cosine(a: np.ndarray, b: np.ndarray) -> float:
 
 
 def run(args: argparse.Namespace) -> dict:
+    frames = max(1, int(getattr(args, "frames", INPUT_SHAPE[3]) or INPUT_SHAPE[3]))
+    input_shape = (INPUT_SHAPE[0], INPUT_SHAPE[1], INPUT_SHAPE[2], frames)
+    output_shape = (OUTPUT_SHAPE[0], OUTPUT_SHAPE[1], OUTPUT_SHAPE[2], frames)
     try:
         import onnx
         import onnxruntime as ort
@@ -180,10 +183,10 @@ def run(args: argparse.Namespace) -> dict:
     report["opset"] = opset
     report["input_shapes"] = input_shapes
     report["output_shapes"] = output_shapes
-    if list(input_shapes.values()) != [list(INPUT_SHAPE)]:
-        raise VerifyError(f"unexpected ONNX inputs {input_shapes}; expected {list(INPUT_SHAPE)}")
-    if list(output_shapes.values()) != [list(OUTPUT_SHAPE)]:
-        raise VerifyError(f"unexpected ONNX outputs {output_shapes}; expected {list(OUTPUT_SHAPE)}")
+    if list(input_shapes.values()) != [list(input_shape)]:
+        raise VerifyError(f"unexpected ONNX inputs {input_shapes}; expected {list(input_shape)}")
+    if list(output_shapes.values()) != [list(output_shape)]:
+        raise VerifyError(f"unexpected ONNX outputs {output_shapes}; expected {list(output_shape)}")
     default_domain_opset = opset.get("ai.onnx") or opset.get("")
     if default_domain_opset is not None and default_domain_opset != args.expect_opset:
         raise VerifyError(f"expected opset {args.expect_opset}, model uses {default_domain_opset}")
@@ -191,11 +194,11 @@ def run(args: argparse.Namespace) -> dict:
 
     # 4. ONNXRuntime reference forward pass on a seeded fixed input.
     rng = np.random.default_rng(args.seed)
-    sample = rng.random(INPUT_SHAPE, dtype=np.float32)
+    sample = rng.random(input_shape, dtype=np.float32)
     session = ort.InferenceSession(str(onnx_path), providers=["CPUExecutionProvider"])
     reference = session.run(None, {session.get_inputs()[0].name: sample})[0].astype(np.float32)
-    if tuple(reference.shape) != OUTPUT_SHAPE:
-        raise VerifyError(f"ONNXRuntime output shape {reference.shape}; expected {OUTPUT_SHAPE}")
+    if tuple(reference.shape) != output_shape:
+        raise VerifyError(f"ONNXRuntime output shape {reference.shape}; expected {output_shape}")
     if not np.isfinite(reference).all():
         raise VerifyError("ONNXRuntime output contains non-finite values")
     mask_sum_error = float(np.abs(reference.sum(axis=1) - 1.0).max())
@@ -227,8 +230,8 @@ def run(args: argparse.Namespace) -> dict:
         model_pt = load_legacy_checkpoint(str(checkpoint))
         with torch.no_grad():
             torch_output = model_pt(torch.from_numpy(sample)).numpy().astype(np.float32)
-        if tuple(torch_output.shape) != OUTPUT_SHAPE:
-            raise VerifyError(f"PyTorch output shape {torch_output.shape}; expected {OUTPUT_SHAPE}")
+        if tuple(torch_output.shape) != output_shape:
+            raise VerifyError(f"PyTorch output shape {torch_output.shape}; expected {output_shape}")
         max_abs = float(np.abs(torch_output - reference).max())
         mean_abs = float(np.abs(torch_output - reference).mean())
         cosine = _cosine(torch_output, reference)
@@ -255,6 +258,7 @@ def run(args: argparse.Namespace) -> dict:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Check the published ONNX artifact and optional torch parity.")
     parser.add_argument("--onnx", required=True, help="ONNX model path (external-data sidecar beside it)")
+    parser.add_argument("--frames", type=int, default=INPUT_SHAPE[3], help="time frames of the fixed-shape window (default 345 = 4 s)")
     parser.add_argument("--checkpoint", help="optional PyTorch checkpoint for torch-vs-onnxruntime parity")
     parser.add_argument("--sha256sums", help="optional SHA256SUMS file to verify against")
     parser.add_argument("--manifest", help="optional export manifest JSON to verify hashes against")

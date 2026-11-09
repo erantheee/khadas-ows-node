@@ -80,7 +80,7 @@ def _shape_of(value_info) -> list[int]:
     return [int(dim.dim_value) for dim in dims]
 
 
-def prepare_onnx(onnx_path: Path, work_dir: Path) -> dict:
+def prepare_onnx(onnx_path: Path, work_dir: Path, frames: int = DEFAULT_INPUT_SHAPE[3]) -> dict:
     """Validate the (possibly external-data) ONNX and re-save a self-contained copy.
 
     Returns a dict of provenance facts for the conversion report.
@@ -152,8 +152,8 @@ def prepare_onnx(onnx_path: Path, work_dir: Path) -> dict:
         "input_shapes": input_shapes,
         "output_shapes": output_shapes,
     }
-    expected_input = list(DEFAULT_INPUT_SHAPE)
-    expected_output = list(DEFAULT_OUTPUT_SHAPE)
+    expected_input = [DEFAULT_INPUT_SHAPE[0], DEFAULT_INPUT_SHAPE[1], DEFAULT_INPUT_SHAPE[2], int(frames)]
+    expected_output = [DEFAULT_OUTPUT_SHAPE[0], DEFAULT_OUTPUT_SHAPE[1], DEFAULT_OUTPUT_SHAPE[2], int(frames)]
     actual_inputs = list(input_shapes.values())
     actual_outputs = list(output_shapes.values())
     if actual_inputs != [expected_input] or actual_outputs != [expected_output]:
@@ -214,7 +214,7 @@ def convert(args: argparse.Namespace) -> dict:
     work_dir = Path(tempfile.mkdtemp(prefix="rknn-convert-"))
     report["work_dir"] = str(work_dir)
     try:
-        report.update(prepare_onnx(onnx_path, work_dir))
+        report.update(prepare_onnx(onnx_path, work_dir, frames=int(getattr(args, "frames", DEFAULT_INPUT_SHAPE[3]) or DEFAULT_INPUT_SHAPE[3])))
         inlined = Path(report["inlined_onnx"])
 
         dataset: Path | None = None
@@ -285,6 +285,7 @@ def main(argv: list[str] | None = None) -> int:
         description="Convert the fixed-shape ONNX model to RKNN (engineering probe).",
     )
     parser.add_argument("--onnx", required=True, help="published ONNX model; its .onnx.data must sit beside it")
+    parser.add_argument("--frames", type=int, default=DEFAULT_INPUT_SHAPE[3], help="time frames of the fixed-shape window (default 345 = 4 s)")
     parser.add_argument("--output", required=True, help="output .rknn path")
     parser.add_argument("--target", default=DEFAULT_TARGET, help=f"RKNN target platform (default: {DEFAULT_TARGET})")
     parser.add_argument("--dataset", help="calibration dataset.txt from tools/make_calibration.py; enables INT8")
