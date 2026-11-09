@@ -45,6 +45,7 @@ from pathlib import Path
 import numpy as np
 
 from . import strategy as role_strategy
+from . import tuning as board_tuning
 
 HEADER = struct.Struct("<IIQIHHi")
 MAGIC = 0x4B4F5753
@@ -302,6 +303,12 @@ class StreamingWindowManager:
         scenario_start_s: float = 0.0,
         scenario_end_s: float = 1e9,
         strategy_strength: float = 0.6,
+        policy: str = "s3",
+        evidence_file: str = "/tmp/dmic-latest.json",
+        node_status_url: str = "http://127.0.0.1:8787/v1/status",
+        eq_depth: float = board_tuning.DEFAULT_DEPTH,
+        masking_dose: float = board_tuning.DEFAULT_MASKING_DOSE,
+        max_positive_db: float = board_tuning.MAX_POSITIVE_DB,
     ) -> None:
         self.backend = backend
         if output_gain not in ("peak", "unity"):
@@ -318,6 +325,16 @@ class StreamingWindowManager:
         self.strategy_strength = float(strategy_strength)
         self.role_tracker = role_strategy.RoleTracker()
         self.envelope = role_strategy.EnvelopeFollower()
+        if policy not in ("roles", "s3"):
+            raise WorkerError(f"policy must be 'roles' or 's3', got {policy!r}")
+        self.policy = policy
+        self.evidence_reader = board_tuning.EvidenceReader(evidence_file)
+        self.tuner = board_tuning.BoardTuner(
+            depth=eq_depth, masking_dose=masking_dose,
+            max_positive_db=max_positive_db,
+            node_status=board_tuning.NodeStatusReader(node_status_url))
+        self.frame_gains = np.zeros(board_tuning.BAND_COUNT, dtype=np.float64)
+        self.last_tuning: dict = {"mode": "FLAT", "stale": True}
         self.samples_processed = 0
         self.role_history: list[dict] = []
         self.window_frames = int(window_frames)
@@ -384,7 +401,10 @@ class StreamingWindowManager:
         magnitude = np.abs(spectrum)
         masks = self.masks(magnitude)  # [1,4,1025,T]
         if self.output_mode == "envelope":
-            output = self._envelope_output(spectrum, masks, frames)
+            if self.policy == "s3":
+                output = self._s3_output(spectrum, masks, frames)
+            else:
+                output = self._envelope_output(spectrum, masks, frames)
             self.samples_processed += frames
             return np.ascontiguousarray(output, dtype="<f4").reshape(-1)
         vocals_spec = masks[0, 0].astype(np.complex64) * spectrum
@@ -400,6 +420,60 @@ class StreamingWindowManager:
             scale = source_peak / vocal_peak if vocal_peak > 1e-9 else 0.0
             output = (vocals * scale).T
         return np.ascontiguousarray(output, dtype="<f4").reshape(-1)
+
+
+    def _s3_output(self, spectrum: np.ndarray, masks: np.ndarray, pcm_frames: int) -> np.ndarray:
+        """Board-side smart tuner: DMIC noise x separated-content style -> 24-band envelope.
+
+        D39 content curve + D41/D48 masking decisions (sources: main/controller.cpp)
+        plus the D56 content x ambient masking matrix (source: systemeq.swift), all
+        applied as a time-varying 24-band gain on the remixed music.  The Mac sends
+        PCM and plays the result; no tuning decision happens on the Mac.
+        """
+        stft_frames = int(masks.shape[-1])
+        content_bands, shares = self.tuner.content_features(spectrum, masks)
+        evidence = self.tuner.evidence.read() or {}
+        status = self.tuner.node_status.read()
+        result = self.tuner.step(
+            level_dbfs=evidence.get("level_dbfs"),
+            ambient_bands=evidence.get("band_dbfs"),
+            event=evidence.get("event"),
+            voice=float(evidence.get("voice_likelihood") or 0.0),
+            conversation=status.get("policy_state"),
+            content_bands=content_bands,
+            stem_shares=shares,
+            dt_s=(self.window_hop * HOP) / SAMPLE_RATE,
+        )
+        target = np.asarray(result["applied_db"], dtype=np.float64)
+        dt_frame = HOP / SAMPLE_RATE
+        gains_db = np.zeros((stft_frames, board_tuning.BAND_COUNT), dtype=np.float64)
+        current = self.frame_gains.copy()
+        for frame_index in range(stft_frames):
+            current = np.array([
+                board_tuning.slew(cur, tgt, dt_frame, 0.65, 0.85)
+                for cur, tgt in zip(current, target)])
+            gains_db[frame_index] = current
+        self.frame_gains = current
+        bin_linear = np.zeros((stft_frames, FREQ_BINS), dtype=np.float32)
+        for frame_index in range(stft_frames):
+            bin_linear[frame_index] = 10.0 ** (
+                self.tuner.band_map.gains_to_bins(gains_db[frame_index]) / 20.0)
+        remixed = istft(spectrum * bin_linear.T.astype(np.complex64), pcm_frames)
+        peak = float(np.max(np.abs(remixed)))
+        if peak > board_tuning.OUTPUT_PEAK_LIMIT:
+            remixed = remixed * (board_tuning.OUTPUT_PEAK_LIMIT / peak)
+        self.last_tuning = {
+            "mode": result.get("mode", "FLAT"),
+            "style": result.get("style", "?"),
+            "stale": bool(result.get("stale")),
+            "applied_peak_db": round(float(np.max(np.abs(target))), 2),
+            "applied_lifted": int(np.sum(target > 0.3)),
+            "applied_cut": int(np.sum(target < -0.3)),
+            "masking_peak_db": round(float(np.max(result["masking_db"])), 2),
+            "exposure": round(float(result.get("exposure", 0.0)), 3),
+            "band_db": [round(float(v), 2) for v in target],
+        }
+        return remixed.T
 
     def _envelope_output(self, spectrum: np.ndarray, masks: np.ndarray, pcm_frames: int) -> np.ndarray:
         """Stems -> dominant roles -> scenario gains -> envelope-shaped remix.
@@ -496,7 +570,21 @@ def serve(manager: StreamingWindowManager, mode: str, backend_name: str, model: 
                     started = time.time()
                     output = manager.process(pcm, channels)
                     elapsed = time.time() - started
-                    if manager.output_mode == "envelope" and manager.role_history:
+                    if manager.output_mode == "envelope" and manager.policy == "s3":
+                        meta = manager.last_tuning
+                        print(
+                            f"packet seq={sequence} frames={frames} "
+                            f"rtf={elapsed / (frames / SAMPLE_RATE):.3f} "
+                            f"mode={meta.get('mode')} style={meta.get('style')} "
+                            f"applied_peak={meta.get('applied_peak_db')} "
+                            f"lifted={meta.get('applied_lifted')} "
+                            f"cut={meta.get('applied_cut')} "
+                            f"mask_peak={meta.get('masking_peak_db')} "
+                            f"exposure={meta.get('exposure')}"
+                            + (" STALE" if meta.get('stale') else ""),
+                            flush=True,
+                        )
+                    elif manager.output_mode == "envelope" and manager.role_history:
                         last = manager.role_history[-1]
                         print(
                             f"packet seq={sequence} frames={frames} "
@@ -560,6 +648,26 @@ def main(argv: list[str] | None = None) -> int:
              "boundaries); unity = keep the model's own scale (use for listening). "
              "Default: $KHADAS_OWS_OUTPUT_GAIN or 'peak'.",
     )
+    parser.add_argument(
+        "--policy",
+        choices=("roles", "s3"),
+        default=None,
+        help="envelope tuning policy: s3 = board-side S3 decision layer + D56 masking "
+             "(default); roles = legacy role-contrast probe. "
+             "Default: $KHADAS_OWS_POLICY or 's3'.",
+    )
+    parser.add_argument("--evidence-file", default="/tmp/dmic-latest.json",
+                        help="board DMIC evidence JSON from tools/dmic_evidence.py")
+    parser.add_argument("--node-status-url", default="http://127.0.0.1:8787/v1/status",
+                        help="loopback node status (conversation policy state)")
+    parser.add_argument("--eq-depth", type=float, default=board_tuning.DEFAULT_DEPTH,
+                        help="device-suggestion depth applied on board (basic 1.3)")
+    parser.add_argument("--masking-dose", type=float,
+                        default=board_tuning.DEFAULT_MASKING_DOSE,
+                        help="D56 masking dose (basic 1.0 / aggressive 1.4)")
+    parser.add_argument("--max-positive-db", type=float,
+                        default=board_tuning.MAX_POSITIVE_DB,
+                        help="positive-gain ceiling (D54: 3 dB basic / 4 dB aggressive)")
     parser.add_argument("--port", type=int)
     args = parser.parse_args(argv)
 
@@ -567,6 +675,7 @@ def main(argv: list[str] | None = None) -> int:
     output_gain = args.output_gain or os.environ.get("KHADAS_OWS_OUTPUT_GAIN") or "peak"
     output_mode = args.output_mode or os.environ.get("KHADAS_OWS_OUTPUT_MODE") or "stem"
     scenario = args.scenario or os.environ.get("KHADAS_OWS_SCENARIO") or "quiet"
+    policy = args.policy or os.environ.get("KHADAS_OWS_POLICY") or "s3"
     if output_gain not in ("peak", "unity"):
         print(f"error: invalid output gain {output_gain!r} (expected peak|unity)", file=sys.stderr)
         return 2
@@ -579,7 +688,13 @@ def main(argv: list[str] | None = None) -> int:
             output_gain=output_gain, output_mode=output_mode, scenario=scenario,
             scenario_start_s=args.scenario_start_ms / 1000.0,
             scenario_end_s=args.scenario_end_ms / 1000.0,
-            strategy_strength=args.strategy_strength)
+            strategy_strength=args.strategy_strength,
+            policy=policy,
+            evidence_file=args.evidence_file,
+            node_status_url=args.node_status_url,
+            eq_depth=args.eq_depth,
+            masking_dose=args.masking_dose,
+            max_positive_db=args.max_positive_db)
     except WorkerError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
