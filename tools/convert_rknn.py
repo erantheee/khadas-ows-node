@@ -80,7 +80,8 @@ def _shape_of(value_info) -> list[int]:
     return [int(dim.dim_value) for dim in dims]
 
 
-def prepare_onnx(onnx_path: Path, work_dir: Path, frames: int = DEFAULT_INPUT_SHAPE[3]) -> dict:
+def prepare_onnx(onnx_path: Path, work_dir: Path, frames: int = DEFAULT_INPUT_SHAPE[3],
+                 stems: int = DEFAULT_OUTPUT_SHAPE[1]) -> dict:
     """Validate the (possibly external-data) ONNX and re-save a self-contained copy.
 
     Returns a dict of provenance facts for the conversion report.
@@ -153,7 +154,7 @@ def prepare_onnx(onnx_path: Path, work_dir: Path, frames: int = DEFAULT_INPUT_SH
         "output_shapes": output_shapes,
     }
     expected_input = [DEFAULT_INPUT_SHAPE[0], DEFAULT_INPUT_SHAPE[1], DEFAULT_INPUT_SHAPE[2], int(frames)]
-    expected_output = [DEFAULT_OUTPUT_SHAPE[0], DEFAULT_OUTPUT_SHAPE[1], DEFAULT_OUTPUT_SHAPE[2], int(frames)]
+    expected_output = [DEFAULT_OUTPUT_SHAPE[0], int(stems), DEFAULT_OUTPUT_SHAPE[2], int(frames)]
     actual_inputs = list(input_shapes.values())
     actual_outputs = list(output_shapes.values())
     if actual_inputs != [expected_input] or actual_outputs != [expected_output]:
@@ -214,7 +215,10 @@ def convert(args: argparse.Namespace) -> dict:
     work_dir = Path(tempfile.mkdtemp(prefix="rknn-convert-"))
     report["work_dir"] = str(work_dir)
     try:
-        report.update(prepare_onnx(onnx_path, work_dir, frames=int(getattr(args, "frames", DEFAULT_INPUT_SHAPE[3]) or DEFAULT_INPUT_SHAPE[3])))
+        report.update(prepare_onnx(
+            onnx_path, work_dir,
+            frames=int(getattr(args, "frames", DEFAULT_INPUT_SHAPE[3]) or DEFAULT_INPUT_SHAPE[3]),
+            stems=int(getattr(args, "stems", DEFAULT_OUTPUT_SHAPE[1]) or DEFAULT_OUTPUT_SHAPE[1])))
         inlined = Path(report["inlined_onnx"])
 
         dataset: Path | None = None
@@ -249,7 +253,8 @@ def convert(args: argparse.Namespace) -> dict:
         started = time.time()
         rknn = RKNN(verbose=bool(args.verbose))
         try:
-            _rknn_step(rknn, "config", rknn.config, target_platform=args.target)
+            _rknn_step(rknn, "config", rknn.config, target_platform=args.target,
+                       optimization_level=int(getattr(args, "opt_level", 3)))
             _rknn_step(rknn, "load_onnx", rknn.load_onnx, model=str(inlined))
             _rknn_step(
                 rknn,
@@ -286,11 +291,14 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--onnx", required=True, help="published ONNX model; its .onnx.data must sit beside it")
     parser.add_argument("--frames", type=int, default=DEFAULT_INPUT_SHAPE[3], help="time frames of the fixed-shape window (default 345 = 4 s)")
+    parser.add_argument("--stems", type=int, default=DEFAULT_OUTPUT_SHAPE[1], help="stem channels on the ONNX output axis (default 4; six-stem model uses 6)")
     parser.add_argument("--output", required=True, help="output .rknn path")
     parser.add_argument("--target", default=DEFAULT_TARGET, help=f"RKNN target platform (default: {DEFAULT_TARGET})")
     parser.add_argument("--dataset", help="calibration dataset.txt from tools/make_calibration.py; enables INT8")
     parser.add_argument("--no-quant", action="store_true", help="build a float16 (non-quantised) model")
     parser.add_argument("--report", help="write the JSON conversion report to this path")
+    parser.add_argument("--opt-level", type=int, default=3,
+                        help="RKNN graph optimization level 0-3 (lower can improve fp16 fidelity)")
     parser.add_argument("--verbose", action="store_true", help="pass verbose=True to RKNN-Toolkit2")
     parser.add_argument("--keep-work-dir", action="store_true", help="keep the inlined-ONNX scratch directory")
     args = parser.parse_args(argv)
