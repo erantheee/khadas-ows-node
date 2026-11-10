@@ -193,3 +193,53 @@ docs/listening-material/                  blinded renditions + instructions
 1. **A2DP sink** — work on branch `edge2-a2dp-sink` (created from `main`, not checked out yet).
 2. **Retrain six-stem model** — entry point in `cores3-noise-adapt-demo/docs/handoff.md`
    (2026-11-10 section).
+
+## 2026-11-10 — A2DP sink bring-up on the board (branch `edge2-a2dp-sink`)
+
+### Done
+- `tools/a2dp_sink_setup.sh` (idempotent; run as `khadas`, sudo prompts): installs
+  PipeWire 1.0.5 / WirePlumber 0.4.17 / `libspa-0.2-bluetooth` / `pulseaudio-utils` /
+  `bluez-tools`; sets adapter `Class = 0x240414`, `DiscoverableTimeout = 0`,
+  `PairableTimeout = 0` in `/etc/bluetooth/main.conf`; installs and enables
+  `bt-agent.service` (`NoInputNoOutput` auto-accept); `loginctl enable-linger khadas`
+  + enables the `pipewire`/`pipewire-pulse`/`wireplumber` user services.
+  Verified on the board: after `systemctl restart bluetooth` the adapter returns with
+  `Discoverable: yes`, `Pairable: yes`, 10 UUIDs **including Audio Sink (110b) /
+  Audio Source (110a)**, agent active, all three user audio services active.
+- `tools/a2dp_sink_capture.sh`: records what the sink receives through the default
+  sink's monitor (`bluez_input.<mac>` is auto-linked to it); `--probe` prints
+  peak/RMS. Tested on board (3 s digital silence with no source; 7 s capture of a
+  1 kHz tone from the Mac -> peak 0.089, 1 kHz present).
+- `docs/a2dp-sink-20261110.md` + `docs/evidence/a2dp-sink-20261110.json`.
+
+### Verified (Mac as A2DP source; board = A2DP sink)
+- BlueZ card `bluez_card.A0_9A_8E_50_A3_35`, active profile `audio-gateway` — this is
+  PipeWire's *receiving-A2DP* mode (remote is source), and `sinks: 0, sources: 0` in
+  `pactl list cards` is a red herring; the node is created dynamically as
+  `bluez_input.<mac> (Stream/Output/Audio, S16LE 2ch 44100)` when the transport starts.
+- Transport UUID `110b` (Audio Sink), codec byte 0 = SBC; macOS side reported
+  `MTU=672, RTP_len=656` and 512-frame HAL buffers.
+- Tone end-to-end OK; graph `bluez_input.<mac> -> HDMI sink -> <sink>.monitor`.
+- Latency: **424.3 ms from `afplay` spawn to PCM at the board sink**, identical on 9
+  consecutive 1 kHz beeps (Mac<->board clock offset via UDP echo: -0.8 ms, best RTT
+  8.5 ms). Method and caveats (Mac source, not phone; player start included) in the doc.
+- **macOS 26 needs HFP advertised**: A2DP-only `bluez5.roles` made coreaudiod log
+  `All profiles not connected, delay publishing`, the transport stayed idle and no PCM
+  arrived. Default WirePlumber roles (A2DP + HFP) work. Do not "optimise" this away.
+
+### Not verified
+- Phone pairing/listening (human step); AAC/LDAC (SBC only observed); analog codec
+  output (this Edge2 image exposes DP/HDMI playback only, no 3.5 mm codec); A2DP
+  source / 2.4G out; full power-cycle persistence (only bluetoothd + wireplumber
+  restarts were exercised).
+- `dmic_evidence.py` stayed healthy during the A2DP run (evidence age 50-106 ms) but
+  the demo-stack watchdog restarted once during package install. A WirePlumber rule to
+  disable the PDM card is included as a comment at the bottom of the setup script if
+  `arecord: Device or resource busy` ever appears.
+
+### Next
+1. Human test: iPhone/Android -> pair "Khadas" -> play; record codec and latency on the
+   phone side (`bluetoothctl info`, per-session codec).
+2. Feed the captured PCM into `worker.py` (A2DP in -> NPU -> 2.4G out) instead of the
+   Mac network stream; re-check RTF and buffering.
+3. Retrain six-stem model (unchanged from the previous section).

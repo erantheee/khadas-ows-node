@@ -1,0 +1,92 @@
+{
+  "kind": "a2dp-sink-bench-evidence",
+  "date": "2026-11-10",
+  "board": {
+    "name": "Khadas Edge2",
+    "soc": "RK3588S",
+    "os": "Ubuntu 24.04.3 LTS",
+    "kernel": "6.1.118",
+    "bt_module": "AP6275P (Broadcom BCM43752)",
+    "bt_transport": "HCI-UART",
+    "bt_hci_version": 5.1,
+    "bt_address": "40:D9:5A:63:8B:53",
+    "adapter_class_configured": "0x240414",
+    "adapter_class_observed_when_discoverable": "0x006c0414"
+  },
+  "software": {
+    "bluez": "5.72-0ubuntu5.4",
+    "pipewire": "1.0.5-1ubuntu3.3",
+    "wireplumber": "0.4.17-1ubuntu4.1",
+    "packages_added": [
+      "pipewire", "pipewire-pulse", "wireplumber",
+      "libspa-0.2-bluetooth", "pulseaudio-utils", "bluez-tools"
+    ]
+  },
+  "adapter_after_setup": {
+    "powered": true,
+    "discoverable": true,
+    "pairable": true,
+    "uuid_count": 10,
+    "a2dp_uuids": [
+      "0000110b-0000-1000-8000-00805f9b34fb (Audio Sink)",
+      "0000110a-0000-1000-8000-00805f9b34fb (Audio Source)"
+    ],
+    "hfp_uuids_present": true,
+    "note": "HFP/HSP roles must stay enabled: with A2DP-only roles macOS 26 logs 'All profiles not connected, delay publishing' and never exposes the box as an audio device."
+  },
+  "pairing": {
+    "agent": "bt-agent -c NoInputNoOutput via /etc/systemd/system/bt-agent.service",
+    "fresh_pair_from_mac_auto_accepted": true,
+    "mac_os_published_device": true,
+    "mac_os_device_name": "Khadas"
+  },
+  "stream": {
+    "profile": "audio-gateway",
+    "bluez_media_transport_uuid": "0000110b-0000-1000-8000-00805f9b34fb",
+    "codec": "SBC",
+    "codec_id_byte": 0,
+    "pipewire_node": "bluez_input.<source-mac>.<n> (Stream/Output/Audio, S16LE 2ch 44100)",
+    "graph": "bluez_input -> default sink (HDMI) -> <sink>.monitor",
+    "macos_reported": {
+      "a2dp_mtu": 672,
+      "rtp_payload_len": 656,
+      "hal_frame_size_samples": 512,
+      "hal_frame_ms_at_44k1": 11.6
+    }
+  },
+  "tone_verification": {
+    "source_tone_hz": 1000,
+    "capture_device": "alsa_output.platform-hdmi0-sound.stereo-fallback.monitor",
+    "capture_format": "s16le 2ch 48000",
+    "dominant_fft_bin_hz": 1000.0,
+    "band_energy_above_floor_db": 40.5,
+    "peak": 0.089,
+    "silence_without_stream": "digital zeros (-180 dBFS)"
+  },
+  "latency": {
+    "method": "NTP-style UDP echo clock offset Mac<->board; board-side pw-play click marker anchors the capture timeline; nine consecutive 1 kHz beeps (1 s period) captured on the board sink monitor; latency = capture wall time of each beep minus its scheduled Mac playback time, modulo the 1 s beep period",
+    "clock_offset_ms_median": -0.8,
+    "clock_offset_best_rtt_ms": 8.5,
+    "per_beep_latency_ms": [424.3, 424.3, 424.3, 424.3, 424.3, 424.3, 424.3, 424.3, 424.3],
+    "result_ms": 424.3,
+    "stdev_ms": 0.0,
+    "includes": ["macOS player start", "A2DP encode/transport", "board jitter buffer", "44.1->48 kHz resample", "sink monitor capture"],
+    "source": "Mac (A2DP source)", "source_note": "phone latency NOT measured; true value is 424 + n*1000 ms with n=0 the plausible branch"
+  },
+  "persistence": {
+    "bluetoothd_restart": "adapter back with discoverable+pairable+Audio Sink UUID, bt-agent active",
+    "full_reboot": "NOT TESTED (board in live demo use)"
+  },
+  "not_verified": [
+    "phone (iPhone/Android) pair + streaming (human step)",
+    "AAC/LDAC codec (SBC only observed)",
+    "analog codec output (no 3.5mm playback device on this Edge2 image; aplay -l shows DP/HDMI only)",
+    "A2DP source (box -> earbuds) and 2.4G output",
+    "full power-cycle persistence"
+  ],
+  "artifacts": [
+    "tools/a2dp_sink_setup.sh",
+    "tools/a2dp_sink_capture.sh",
+    "docs/a2dp-sink-20261110.md"
+  ]
+}
