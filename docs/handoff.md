@@ -298,3 +298,27 @@ docs/listening-material/                  blinded renditions + instructions
 - Open: decide whether to install the relay as a systemd user service (always-on
   A2DP->NPU->DAC), and whether the 9100 exclusivity vs the Mac five-stem bridge needs a
   small arbitration script.
+
+### Addendum 18:2x — branch state, six-stem work by the other session, Mac-side restore
+- This branch (`edge2-a2dp-sink`) is based on `main` @ `07b7ad7` and contains only the A2DP
+  work: sink bring-up (`tools/a2dp_sink_setup.sh`), capture (`tools/a2dp_sink_capture.sh`),
+  USB output helper (`tools/a2dp_sink_usb_output.sh`), the NPU relay
+  (`tools/a2dp_stem_relay.py`), the Mac-side CoreAudio helper used to switch output during
+  verification (`tools/mac/audioswitch.swift`), the A2DP doc and the evidence JSON.
+- **The other session's six-stem optimization is NOT in this branch** — it is uncommitted WIP
+  in the `main` checkout right now: `python/khadas_ows/model.py` (input_scale),
+  `tools/convert_rknn.py --stems`, `tools/dmic_evidence.py`, plus untracked
+  `tools/export_six_onnx.py`, `tools/bench_six_rknn.py`, `models/six/`, `experiments/`.
+  Per its delivery-log entries: on-board RKNN conversion for the 6-stem boundary works
+  (output `(1,6,1025,345)`, per-window 1.061 s / 4.005 s -> RTF 0.265), but the fp16 artifact
+  does not reproduce ONNX on real-audio magnitudes (max_abs 0.999 / cosine 0.904), so a
+  retrain with input normalization is planned before listening acceptance.
+- The A2DP relay is stem-count agnostic: it only streams 44.1 kHz float32 PCM into the node
+  and plays back whatever the worker returns. When the six-stem work lands on `main`
+  (commit + deploy a worker/model), rebase this branch and rerun the relay; no relay code
+  change is expected, only the deployed worker/model hash changes.
+- Board state at hand-off: A2DP sink configured and paired (phone "oowow"), audio stack
+  enabled, relay NOT running, no silent sink left, default playout is direct A2DP ->
+  USB DAC. Mac demo host is still running (`source=khadas`, systemeq available); the Mac's
+  default output at hand-off was the built-in speakers, not the Xiaomi earbuds —
+  `tools/mac/audioswitch.swift` can switch it back (`audioswitch set Xiaomi`).
