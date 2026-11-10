@@ -322,3 +322,11 @@ docs/listening-material/                  blinded renditions + instructions
   USB DAC. Mac demo host is still running (`source=khadas`, systemeq available); the Mac's
   default output at hand-off was the built-in speakers, not the Xiaomi earbuds —
   `tools/mac/audioswitch.swift` can switch it back (`audioswitch set Xiaomi`).
+- **Update (18:5x):** the six-stem session's working-tree changes are now captured and pushed
+  on branch `six-stem-onboard` (commit `f59df07`) so the work is on GitHub for review:
+  six-stem ONNX export + on-board RKNN conversion (RTF 0.265, output `(1,6,1025,345)`),
+  `MaskNetwork.input_scale`, `convert_rknn.py --stems`, `bench_six_rknn.py`, manifest and the
+  delivery-log entries (including the fp16 parity P0: RKNN vs ONNX real-audio cosine 0.904,
+  retrain/normalisation fix planned). That branch is **not merged into this A2DP branch** and
+  the **running board worker is still the 4-stem `candidate-v0-t88.fp.rknn`** — deploy/listen
+  acceptance for the six-stem model remains open.
