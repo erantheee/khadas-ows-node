@@ -282,3 +282,19 @@ docs/listening-material/                  blinded renditions + instructions
 - Next: (1) decide whether to make the relay a systemd user service (auto A2DP->NPU->DAC),
   (2) audible verification of the tuning layer (noise injection or DMIC level offset),
   (3) restore/keep the Mac demo path separately (single audio client on 9100).
+
+### Addendum 17:3x — noise-triggered tuning verified through the A2DP relay
+- Ran a 900 s relay session; user played a noise source near the board mic while the phone
+  streamed music. Tuner went `FLAT -> SONG_EQ` as DMIC rose -60 -> -39 dBFS:
+  `applied_peak_db` up to **2.17 dB**, masking peak 0.76 dB, 18 bands lifted / 3 cut,
+  exposure 0.345 (also an `EXTERNAL_VOICE_INTENT` at 3.0 dB / 24 lifted when speech was
+  detected). Quiet-period A/B stays 0.0 dB/band; the noisy-period A/B shows +1.5..+3.5 dB
+  band differences (rough alignment; tuner telemetry + human listening are authoritative —
+  user confirmed the audible change).
+- Session numbers: 899 chunks / 900 s, **0 underruns**, RTT p50 309 ms / p95 393 ms,
+  `actual_mode=npu`, 0 fallbacks, 326 s music, `--preroll 2`; exit restores default sink and
+  removes the silent sink. Relay stats now always carry `a2dp_moves` (init fix).
+- Note: the noise was classified as `keyboard` events (white/rain noise) — a knob to revisit.
+- Open: decide whether to install the relay as a systemd user service (always-on
+  A2DP->NPU->DAC), and whether the 9100 exclusivity vs the Mac five-stem bridge needs a
+  small arbitration script.

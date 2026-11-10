@@ -412,7 +412,7 @@ def main(argv: list[str] | None = None) -> int:
     signal.signal(signal.SIGTERM, _on_signal)
 
     stats: dict = {"chunks": 0, "underruns": 0, "dropped_input_chunks": 0,
-                   "dropped_output_chunks": 0, "captured_audio_seconds": 0.0}
+                   "dropped_output_chunks": 0, "captured_audio_seconds": 0.0, "a2dp_moves": 0}
     stats_lock = threading.Lock()
     capture = player = None
     module_id = None

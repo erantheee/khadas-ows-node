@@ -157,5 +157,69 @@
     "ab_note": "transparent because the board tuner is FLAT in the quiet room (dmic -60.6 dBFS); NPU masks still run",
     "estimated_added_latency_ms": "2500-3000 (A2DP 400 + capture 1000 + NPU RTT ~400 + preroll 1000)",
     "address": "phone -> bluez_input -> a2dp_stem_in null sink -> relay(9100) -> NPU worker -> pacat -> USB DAC"
+  },
+  "noise_triggered_tuning_verification": {
+    "verified_date": "2026-11-10",
+    "method": "user played a noise source near the board PDM mic while the phone streamed music through the A2DP->NPU->USB relay",
+    "run": {
+      "seconds": 900,
+      "chunks": 899,
+      "underruns": 0,
+      "rtt_p50_ms": 309.3,
+      "rtt_p95_ms": 393.2,
+      "node_actual_mode": "npu",
+      "node_fallbacks": 0,
+      "captured_music_seconds": 326,
+      "preroll_chunks": 2
+    },
+    "tuner_reactions": [
+      {
+        "time_utc": "09:19:43",
+        "mode": "SONG_EQ",
+        "applied_peak_db": 2.17,
+        "masking_peak_db": 0.76,
+        "lifted": 18,
+        "cut": 3,
+        "exposure": 0.345,
+        "dmic_dbfs": -39.64,
+        "env": "NOISY",
+        "event": "keyboard"
+      },
+      {
+        "time_utc": "09:20:29",
+        "mode": "SONG_EQ",
+        "applied_peak_db": 1.25,
+        "masking_peak_db": 0.55,
+        "lifted": 18,
+        "cut": 6,
+        "exposure": 0.292,
+        "dmic_dbfs": -41.61,
+        "env": "NOISY",
+        "event": "keyboard"
+      },
+      {
+        "time_utc": "09:15:55",
+        "mode": "EXTERNAL_VOICE_INTENT",
+        "applied_peak_db": 3.0,
+        "masking_peak_db": 0.09,
+        "lifted": 24,
+        "cut": 0,
+        "exposure": 0.016,
+        "dmic_dbfs": -52.05,
+        "env": "VOICE",
+        "event": "speech"
+      }
+    ],
+    "quiet_baseline": {
+      "mode": "FLAT",
+      "applied_peak_db": 0.0,
+      "ab_24band_gain_db": "0.0 in every band"
+    },
+    "ab_noise_window": {
+      "band_gain_db": "+1.5 to +3.5 dB on some bands (independent-capture alignment, rough)",
+      "note": "authoritative evidence is the tuner telemetry above plus the human listening check"
+    },
+    "human_listening": "user reported the processed audio changed noticeably when noise was present ('搞定了')",
+    "open_detail": "the noise source was classified as keyboard events; classification thresholds for white/rain noise can be revisited"
   }
 }
