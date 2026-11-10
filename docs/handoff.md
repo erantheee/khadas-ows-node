@@ -243,3 +243,19 @@ docs/listening-material/                  blinded renditions + instructions
 2. Feed the captured PCM into `worker.py` (A2DP in -> NPU -> 2.4G out) instead of the
    Mac network stream; re-check RTF and buffering.
 3. Retrain six-stem model (unchanged from the previous section).
+
+### Addendum 16:3x — listening path verified with the user's phone + wired earphone
+- Board has **no usable analog output**: DT contains `es8316-sound` but the codec is not
+  populated (`dmesg: es8316 3-0010: ES8316 doesn't exist, exit of probe!`, `i2cdetect -y 3`
+  shows nothing at 0x10); `aplay -l` only lists DP/HDMI. Kernel has `CONFIG_SND_USB_AUDIO=y`.
+- Verified chain: Android phone (`oowow`) --A2DP (SBC 44.1 kHz)--> board --policy link-->
+  USB DAC (KT/Moondrop "Old Fashioned") --> wired earphone. `pactl list sink-inputs`:
+  `Sink Input #889 "oowow (codec SBC)"`, `s16le 2ch 44100Hz`, sink RUNNING; `pw-link -l` shows
+  `bluez_input.50_3B_70_A9_72_A1.2:output_FL/FR -> USB sink playback_FL/FR` created by policy,
+  no manual linking. 6.14 s of the USB monitor captured at RMS -40.5 dBFS (music).
+- Latency: USB local ~10-20 ms; A2DP ingress reference 424 ms (Mac run); phone leg not directly
+  measured -> ≈0.4-0.5 s end to end, fine for music, not for video lip-sync.
+- New `tools/a2dp_sink_usb_output.sh`: picks the first USB audio sink as default output
+  (unmute, 85 %); the default sink is saved in WirePlumber state.
+- Product note: Edge2 cannot drive wired earphones without a USB-Audio device or an added codec;
+  the plan doc's "onboard 3.5 mm codec" assumption does not hold for this board.

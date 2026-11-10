@@ -18,8 +18,12 @@
     "pipewire": "1.0.5-1ubuntu3.3",
     "wireplumber": "0.4.17-1ubuntu4.1",
     "packages_added": [
-      "pipewire", "pipewire-pulse", "wireplumber",
-      "libspa-0.2-bluetooth", "pulseaudio-utils", "bluez-tools"
+      "pipewire",
+      "pipewire-pulse",
+      "wireplumber",
+      "libspa-0.2-bluetooth",
+      "pulseaudio-utils",
+      "bluez-tools"
     ]
   },
   "adapter_after_setup": {
@@ -67,11 +71,28 @@
     "method": "NTP-style UDP echo clock offset Mac<->board; board-side pw-play click marker anchors the capture timeline; nine consecutive 1 kHz beeps (1 s period) captured on the board sink monitor; latency = capture wall time of each beep minus its scheduled Mac playback time, modulo the 1 s beep period",
     "clock_offset_ms_median": -0.8,
     "clock_offset_best_rtt_ms": 8.5,
-    "per_beep_latency_ms": [424.3, 424.3, 424.3, 424.3, 424.3, 424.3, 424.3, 424.3, 424.3],
+    "per_beep_latency_ms": [
+      424.3,
+      424.3,
+      424.3,
+      424.3,
+      424.3,
+      424.3,
+      424.3,
+      424.3,
+      424.3
+    ],
     "result_ms": 424.3,
     "stdev_ms": 0.0,
-    "includes": ["macOS player start", "A2DP encode/transport", "board jitter buffer", "44.1->48 kHz resample", "sink monitor capture"],
-    "source": "Mac (A2DP source)", "source_note": "phone latency NOT measured; true value is 424 + n*1000 ms with n=0 the plausible branch"
+    "includes": [
+      "macOS player start",
+      "A2DP encode/transport",
+      "board jitter buffer",
+      "44.1->48 kHz resample",
+      "sink monitor capture"
+    ],
+    "source": "Mac (A2DP source)",
+    "source_note": "phone latency NOT measured; true value is 424 + n*1000 ms with n=0 the plausible branch"
   },
   "persistence": {
     "bluetoothd_restart": "adapter back with discoverable+pairable+Audio Sink UUID, bt-agent active",
@@ -88,5 +109,32 @@
     "tools/a2dp_sink_setup.sh",
     "tools/a2dp_sink_capture.sh",
     "docs/a2dp-sink-20261110.md"
-  ]
+  ],
+  "phone_ingress_and_listening": {
+    "verified": true,
+    "source": "Android phone ('oowow', BT class 0x007a020c smartphone)",
+    "codec": "SBC 44.1 kHz",
+    "pactl_sink_input": "#889 media.name='oowow (codec SBC)', s16le 2ch 44100Hz",
+    "nodes": "bluez_input.50_3B_70_A9_72_A1.2 (Stream/Output/Audio) -> USB DAC sink (policy links, no manual pw-link)",
+    "usb_output": {
+      "device": "KT/Moondrop Old Fashioned USB DAC (USB id 35d8:0122)",
+      "kernel": "CONFIG_SND_USB_AUDIO=y (builtin)",
+      "default_sink_selected_by": "tools/a2dp_sink_usb_output.sh",
+      "sink": "alsa_output.usb-KT_Moondrop_Old_Fashioned_...analog-stereo",
+      "state": "RUNNING while streaming"
+    },
+    "capture_verification": {
+      "source": "USB DAC sink monitor",
+      "seconds": 6.14,
+      "rms_dbfs": -40.5,
+      "peak": 0.042,
+      "content": "music (non-silent); top energy 72-329 Hz"
+    },
+    "latency_estimate_ms": "≈400-500 total (USB local ~10-20 ms; A2DP ingress reference 424 ms from the Mac run; phone leg not directly measured)"
+  },
+  "board_analog_output": {
+    "available": false,
+    "evidence": "dmesg: es8316 3-0010: ES8316 doesn't exist, exit of probe!; i2cdetect -y 3: no device at 0x10; aplay -l: only rockchip-dp0 / rockchip-hdmi0",
+    "consequence": "wired earphones only via USB-Audio device; product box needs an added codec"
+  }
 }
