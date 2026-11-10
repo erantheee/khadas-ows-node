@@ -159,3 +159,37 @@ docs/evidence/soak-attempt1-aborted.json  first soak attempt (aborted; cause doc
 docs/soak-report-npu-20261106.json        30-minute soak verdict (final run)
 docs/listening-material/                  blinded renditions + instructions
 ```
+
+## 2026-11-10 — six-stem strategy deployed; board BT findings; A2DP branch created
+
+### Done (commit `1ebb5af` on `main`)
+- `strategy.py`: six-stem strategy schema (`STEMMS6`/`ROLE_MAP6`/`PROFILES`/`role_profile6`/
+  `contrast_only_profile6`/`automatic_profile6`/`remix_risk`/`active_stem_count`/
+  `fold_to_execution`) + `RoleTracker(role_map=...)`. Worker envelope roles path decides on six
+  stems and executes on the 4-stem candidate (guitar/piano silent -> folded into `other` with max
+  semantics). Model unchanged (still 4-stem).
+- Verified: pytest `test_strategy.py` 14/14, `test_worker_streaming.py` 11/11, `ctest` 5/5.
+  Deployed to Edge2 `~/khadas-ows-node` (sha256 matches local); board stub smoke printed
+  `BOARD-ENVELOPE-6STEM-OK`. Board backups: `python/khadas_ows/*.bak-0656`.
+- **Board worker NOT restarted** (still `--policy s3`). Six-stem roles path: switch with
+  `--policy roles`; rollback with `--policy s3`. Current board services: `dmic_evidence.py` +
+  NPU worker + C++ node.
+- Git: `tools/dmic_evidence.py` still has pre-existing uncommitted changes (NOT ours — do not
+  fold into A2DP/retrain commits). `experiments/` untracked.
+- Local env: port 8787 is held by the user's S3 host (`-m host ... --web-port 8787`, PID 52581),
+  so `tests/test_network_integration.py` fails locally for that reason only; C++ node verified
+  on port 8788 (full status JSON). No code defect.
+
+### Board Bluetooth (input for the A2DP sink branch)
+- AP6275P (Broadcom BCM43752A2 combo), BT over HCI UART, **HCI 5.1**; `btmgmt info` lists
+  `br/edr` + `le` -> Classic BT (A2DP) and BLE both supported. Controller MAC 40:D9:5A:63:8B:53.
+- Current: `rfkill: hci0 Soft blocked: yes`, `Powered: no`; `bluetoothctl power on` fails until
+  root runs `rfkill unblock bluetooth` (khadas sudo asks for a password — no NOPASSWD).
+- No audio stack: pipewire/pulseaudio absent (`pactl` missing); BlueZ 5.72 shows only AVRCP
+  UUIDs, no A2DP sink. A2DP sink needs: root rfkill unblock + PipeWire/WirePlumber (or
+  PulseAudio) + BlueZ media config, then an iPhone pairing/listening test (human step).
+
+### Next (user instructions 2026-11-10)
+1. **A2DP sink** — work on branch `edge2-a2dp-sink` (created from `main`, not checked out yet).
+2. **Retrain six-stem model** — entry point in `cores3-noise-adapt-demo/docs/handoff.md`
+   (2026-11-10 section).
