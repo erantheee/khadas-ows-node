@@ -259,3 +259,26 @@ docs/listening-material/                  blinded renditions + instructions
   (unmute, 85 %); the default sink is saved in WirePlumber state.
 - Product note: Edge2 cannot drive wired earphones without a USB-Audio device or an added codec;
   the plan doc's "onboard 3.5 mm codec" assumption does not hold for this board.
+
+### Addendum 17:1x — A2DP -> board NPU -> USB earphone relay (live-music run verified)
+- New `tools/a2dp_stem_relay.py`: captures the received A2DP stream from a silent
+  intermediate sink, sends 1 s float32 packets to the C++ node on 127.0.0.1:9100
+  (`--mode npu`, worker `--policy s3 --output-mode envelope`), and plays the processed PCM
+  to the USB DAC. A route guard moves any A2DP sink-input back onto the silent sink every
+  second (WirePlumber stream-restore otherwise re-links it to the earphone, observed).
+- Verified with the user's phone streaming real music for 240 s: 239 chunks / 238 s played,
+  `captured_audio_seconds` 235 s, **0 underruns**, request RTT p50 373 ms / p95 416 ms,
+  `actual_mode=npu` throughout, 0 fallbacks, node rtf 0.37; `--preroll 1`.
+- A/B (input monitor vs processed output, 24 bands): **0.0 dB in every band** — transparent
+  because the board tuner is FLAT in this quiet room (`dmic_level_dbfs=-60.6`, mode FLAT,
+  applied_peak 0 dB). The NPU masks still run (rtf proves it); audible envelope/masking needs
+  a noisy environment, a forced scenario, or injected evidence. This is the known DMIC-level
+  calibration gap, not a relay defect.
+- Estimated added latency over direct playout: ~2.5-3 s (A2DP 0.4 + 1 s capture + 0.4 NPU RTT
+  + 1 s pre-roll); not acoustically measured. The C++ node serves one audio client at a time,
+  so the relay blocks the Mac five-stem bridge while running.
+- Usage: `~/khadas-ows-node/.venv/bin/python tools/a2dp_stem_relay.py --duration 600
+  --record /tmp/processed.wav --stats-json /tmp/relay.json`
+- Next: (1) decide whether to make the relay a systemd user service (auto A2DP->NPU->DAC),
+  (2) audible verification of the tuning layer (noise injection or DMIC level offset),
+  (3) restore/keep the Mac demo path separately (single audio client on 9100).

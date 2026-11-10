@@ -136,5 +136,26 @@
     "available": false,
     "evidence": "dmesg: es8316 3-0010: ES8316 doesn't exist, exit of probe!; i2cdetect -y 3: no device at 0x10; aplay -l: only rockchip-dp0 / rockchip-hdmi0",
     "consequence": "wired earphones only via USB-Audio device; product box needs an added codec"
+  },
+  "npu_relay": {
+    "tool": "tools/a2dp_stem_relay.py",
+    "verified_date": "2026-11-10",
+    "source": "Android phone ('oowow') over A2DP (SBC 44.1 kHz), real music",
+    "run_seconds": 240,
+    "chunks": 239,
+    "played_seconds": 238,
+    "captured_music_seconds": 235,
+    "underruns": 0,
+    "dropped_input_chunks": 0,
+    "dropped_output_chunks": 0,
+    "rtt_p50_ms": 373.4,
+    "rtt_p95_ms": 416.1,
+    "node_actual_mode": "npu",
+    "node_fallbacks": 0,
+    "node_last_rtf": 0.37,
+    "ab_24band_gain_db": "0.0 dB in every band",
+    "ab_note": "transparent because the board tuner is FLAT in the quiet room (dmic -60.6 dBFS); NPU masks still run",
+    "estimated_added_latency_ms": "2500-3000 (A2DP 400 + capture 1000 + NPU RTT ~400 + preroll 1000)",
+    "address": "phone -> bluez_input -> a2dp_stem_in null sink -> relay(9100) -> NPU worker -> pacat -> USB DAC"
   }
 }
