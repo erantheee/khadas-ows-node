@@ -38,6 +38,9 @@ import urllib.request
 import numpy as np
 
 BAND_COUNT = 24
+#: 分轨轨数（vocals/drums/bass/other）——逐轨包络就是按这 4 条分别算/分别执行。
+STEM_COUNT = 4
+STEM_NAMES = ("vocals", "drums", "bass", "other")
 BAND_CENTERS_HZ = np.array([
     70.7, 141.4, 244.9, 346.4, 451.7, 566.8, 696.5, 841.7,
     996.8, 1171.3, 1370.0, 1595.0, 1854.7, 2154.1, 2503.3,
@@ -300,34 +303,47 @@ class BoardTuner:
         self.masking_db = np.zeros(BAND_COUNT, dtype=np.float64)
         self.device_db = np.zeros(BAND_COUNT, dtype=np.float64)
         self.applied_db = np.zeros(BAND_COUNT, dtype=np.float64)
+        #: 逐轨 24 段包络（4×24，含 650/850 ms slew）：audio 路径按它分别处理 4 条 stem。
+        self.stem_db = np.zeros((STEM_COUNT, BAND_COUNT), dtype=np.float64)
         self.last: dict = {"mode": MODE_FLAT, "style": "unknown", "stale": True}
 
     # ── content / style features from the separated spectrum ─────────────────
-    def content_features(self, spectrum: np.ndarray, masks: np.ndarray) -> tuple[np.ndarray, dict]:
-        """spectrum [2,1025,T], masks [1,4,1025,T] -> (content dB[24], stem shares)."""
+    def content_features(self, spectrum: np.ndarray, masks: np.ndarray):
+        """spectrum [2,1025,T], masks [1,4,1025,T] -> (content dB[24], shares, per-stem dB[4,24])."""
         power = np.abs(spectrum).astype(np.float64) ** 2          # [2,b,T]
-        band_power = self.band_map.band_power(power.sum(axis=0).mean(axis=1))
+        power_sum = power.sum(axis=0)                             # [b,T]
+        band_power = self.band_map.band_power(power_sum.mean(axis=1))
         content_db = 10.0 * np.log10(np.maximum(band_power, 1e-18))
         masks_power = np.asarray(masks[0], dtype=np.float64) ** 2  # [4,b,T]
-        totals = (masks_power * power.sum(axis=0)[None, :, :]).sum(axis=(1, 2)) + 1e-18
+        totals = (masks_power * power_sum[None, :, :]).sum(axis=(1, 2)) + 1e-18
         shares = {name: float(totals[i] / totals.sum())
-                  for i, name in enumerate(("vocals", "drums", "bass", "other"))}
-        return content_db, shares
+                  for i, name in enumerate(STEM_NAMES)}
+        # 逐轨内容谱：每轨自己的 24 段电平。逐轨包络按"该轨在这个频段有没有内容"门控，
+        # 空频段不会被硬塞增益（否则分离残差/空段会被抬出怪声）。
+        stem_db = np.zeros((STEM_COUNT, BAND_COUNT), dtype=np.float64)
+        for stem in range(STEM_COUNT):
+            stem_bins = (masks_power[stem] * power_sum).sum(axis=1)
+            stem_bands = self.band_map.band_power(stem_bins)
+            stem_db[stem] = 10.0 * np.log10(np.maximum(stem_bands, 1e-18))
+        return content_db, shares, stem_db
 
     def stale(self) -> dict:
         self.device_db[:] = 0.0
         self.masking_db[:] = 0.0
         self.applied_db[:] = 0.0
+        self.stem_db[:] = 0.0
         self.voice_mode = False
         self.level = None
         self.last = {"mode": MODE_FLAT, "applied_db": self.applied_db.copy(),
                      "device_db": self.device_db.copy(), "masking_db": self.masking_db.copy(),
+                     "stem_db": self.stem_db.copy(),
                      "style": "stale", "exposure": 0.0, "stale": True}
         return self.last
 
     def step(self, *, level_dbfs: "float | None", ambient_bands, event: "str | None",
              voice: float, conversation: "str | None", content_bands: np.ndarray,
-             stem_shares: "dict[str, float] | None", dt_s: float) -> dict:
+             stem_shares: "dict[str, float] | None", dt_s: float,
+             stem_content_bands: "np.ndarray | None" = None) -> dict:
         dt = max(0.05, min(2.0, float(dt_s)))
         if level_dbfs is None or not isinstance(level_dbfs, (int, float)) or \
                 not math.isfinite(float(level_dbfs)):
@@ -433,12 +449,38 @@ class BoardTuner:
         applied = np.clip(device * self.depth + self.masking_db,
                           MIN_APPLIED_DB, self.max_positive_db)
         self.applied_db = applied
+
+        # ── 逐轨 24 段包络（4 条独立曲线，650/850 ms slew）───────────────────
+        # 用同一条 S3 执行曲线，但按"该轨在这个频段有没有内容"门控：每轨只在自己的
+        # 频段里被补偿/掩蔽，空频段不硬塞增益。这样才能真正按 4 轨分别调节，而不是
+        # 把同一条曲线贴在混音上。
+        if stem_content_bands is not None and mode != MODE_FLAT:
+            applied_curve = np.clip(device * self.depth + self.masking_db,
+                                    MIN_APPLIED_DB, self.max_positive_db)
+            for stem in range(STEM_COUNT):
+                content = np.asarray(stem_content_bands[stem], dtype=np.float64)
+                if content.size != BAND_COUNT:
+                    continue
+                peak = float(np.max(content))
+                presence = np.clip((content - (peak - 24.0)) / 24.0, 0.0, 1.0)
+                target_curve = applied_curve * presence
+                for band in range(BAND_COUNT):
+                    self.stem_db[stem, band] = slew(
+                        self.stem_db[stem, band], float(target_curve[band]),
+                        dt, 0.65, 0.85)
+        else:
+            for stem in range(STEM_COUNT):
+                for band in range(BAND_COUNT):
+                    self.stem_db[stem, band] = slew(
+                        self.stem_db[stem, band], 0.0, dt, 0.65, 0.85)
+
         self.last = {
             "mode": mode,
             "style": style,
             "applied_db": applied.copy(),
             "device_db": device.copy(),
             "masking_db": self.masking_db.copy(),
+            "stem_db": self.stem_db.copy(),
             "exposure": exposure,
             "stale": False,
             "voice": voice,

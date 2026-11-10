@@ -336,6 +336,9 @@ class StreamingWindowManager:
             max_positive_db=max_positive_db,
             node_status=board_tuning.NodeStatusReader(node_status_url))
         self.frame_gains = np.zeros(board_tuning.BAND_COUNT, dtype=np.float64)
+        #: 逐轨 STFT 帧增益（4×24），逐轨包络渲染用。
+        self.stem_frame_gains = np.zeros(
+            (board_tuning.STEM_COUNT, board_tuning.BAND_COUNT), dtype=np.float64)
         self.last_tuning: dict = {"mode": "FLAT", "stale": True}
         # 10 Hz control loop: the tuner decision cadence is decoupled from the 1 s audio
         # packet cadence, so a noise/event change reaches the Mac in ~100 ms instead of
@@ -439,25 +442,35 @@ class StreamingWindowManager:
         PCM and plays the result; no tuning decision happens on the Mac.
         """
         stft_frames = int(masks.shape[-1])
-        content_bands, shares = self.tuner.content_features(spectrum, masks)
+        content_bands, shares, stem_bands = self.tuner.content_features(spectrum, masks)
         with self._features_lock:
-            self.latest_features = (content_bands, shares)
+            self.latest_features = (content_bands, shares, stem_bands)
         self.start_control_loop()
-        target = np.asarray(self.tuner.applied_db, dtype=np.float64)
         dt_frame = HOP / SAMPLE_RATE
-        gains_db = np.zeros((stft_frames, board_tuning.BAND_COUNT), dtype=np.float64)
-        current = self.frame_gains.copy()
-        for frame_index in range(stft_frames):
-            current = np.array([
-                board_tuning.slew(cur, tgt, dt_frame, 0.65, 0.85)
-                for cur, tgt in zip(current, target)])
-            gains_db[frame_index] = current
-        self.frame_gains = current
-        bin_linear = np.zeros((stft_frames, FREQ_BINS), dtype=np.float32)
-        for frame_index in range(stft_frames):
-            bin_linear[frame_index] = 10.0 ** (
-                self.tuner.band_map.gains_to_bins(gains_db[frame_index]) / 20.0)
-        remixed = istft(spectrum * bin_linear.T.astype(np.complex64), pcm_frames)
+        # 逐轨目标包络（4×24，来自 10 Hz 决策环）；决策环还没出结果时全 0 = 原样通过。
+        stem_targets = np.asarray(
+            getattr(self.tuner, "stem_db", np.zeros(
+                (board_tuning.STEM_COUNT, board_tuning.BAND_COUNT), dtype=np.float64)),
+            dtype=np.float64)
+        # 逐轨逐帧 slew（650/850 ms），与 S3 固件同一口径。
+        stem_bin_gain = np.ones(
+            (board_tuning.STEM_COUNT, stft_frames, FREQ_BINS), dtype=np.float32)
+        for stem in range(board_tuning.STEM_COUNT):
+            current = self.stem_frame_gains[stem].copy()
+            for frame_index in range(stft_frames):
+                current = np.array([
+                    board_tuning.slew(cur, tgt, dt_frame, 0.65, 0.85)
+                    for cur, tgt in zip(current, stem_targets[stem])])
+                stem_bin_gain[stem, frame_index] = 10.0 ** (
+                    self.tuner.band_map.gains_to_bins(current) / 20.0)
+            self.stem_frame_gains[stem] = current
+        # 4 条 stem 各乘自己的逐帧增益；分离残差保持原样——把残差也按某条 stem 的
+        # 包络处理会造出怪声（分离没扣干净的部分本来就不该被单独补偿）。
+        separated = masks[0].astype(np.complex64)[:, None, :, :] * spectrum[None, :, :, :]  # [4,2,b,T]
+        residual = spectrum - separated.sum(axis=0)
+        gain = stem_bin_gain.transpose(0, 2, 1)[:, None, :, :]               # [4,1,b,T]
+        mixed_spectrum = (separated * gain).sum(axis=0) + residual
+        remixed = istft(mixed_spectrum, pcm_frames)
         peak = float(np.max(np.abs(remixed)))
         if peak > board_tuning.OUTPUT_PEAK_LIMIT:
             remixed = remixed * (board_tuning.OUTPUT_PEAK_LIMIT / peak)
@@ -465,6 +478,10 @@ class StreamingWindowManager:
 
     def _publish_tuning(self, result: dict) -> None:
         target = np.asarray(result["applied_db"], dtype=np.float64)
+        stem_target = np.asarray(
+            result.get("stem_db", np.zeros(
+                (board_tuning.STEM_COUNT, board_tuning.BAND_COUNT))),
+            dtype=np.float64)
         self.last_tuning = {
             "mode": result.get("mode", "FLAT"),
             "style": result.get("style", "?"),
@@ -479,6 +496,15 @@ class StreamingWindowManager:
                           for v in np.asarray(result.get("device_db", target))],
             "masking_db": [round(float(v), 2)
                            for v in np.asarray(result.get("masking_db", np.zeros(24)))],
+            # 逐轨 24 段包络遥测（4×24）；面板/验收用它证明"按 4 轨分别调节"。
+            "stem_peak_db": [
+                round(float(value), 2)
+                for value in np.max(np.abs(stem_target), axis=1)
+            ],
+            "stem_db": [
+                [round(float(value), 2) for value in row]
+                for row in stem_target
+            ],
         }
         try:
             path = Path("/tmp/tuning-latest.json")
@@ -496,7 +522,7 @@ class StreamingWindowManager:
                 with self._features_lock:
                     features = self.latest_features
                 if features is not None:
-                    content_bands, shares = features
+                    content_bands, shares, stem_bands = features
                     evidence = self.tuner.evidence.read() or {}
                     status = self.tuner.node_status.read()
                     result = self.tuner.step(
@@ -508,6 +534,7 @@ class StreamingWindowManager:
                         content_bands=content_bands,
                         stem_shares=shares,
                         dt_s=0.1,
+                        stem_content_bands=stem_bands,
                     )
                     self._publish_tuning(result)
             except Exception:  # noqa: BLE001 - control loop must never kill audio
