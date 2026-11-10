@@ -177,3 +177,25 @@ def test_cpu_mode_missing_checkpoint_fails_clearly(tmp_path):
     )
     assert result.returncode != 0
     assert "model not found" in (result.stdout + result.stderr).lower()
+
+
+def test_envelope_roles_policy_runs_six_stem_decision_on_four_stem_model():
+    """Six-stem strategy schema (Mac parity) on the 4-stem candidate model."""
+    backend = W.StubBackend()
+    manager = W.StreamingWindowManager(
+        backend, output_mode="envelope", policy="roles",
+        scenario="broadband", strategy_strength=0.6)
+    output = manager.process(sine_packet(1.0), CHANNELS)
+    assert output.shape == (2 * SR,)
+    assert np.isfinite(output).all()
+    assert manager.role_history, "envelope path must record role history"
+    entry = manager.role_history[-1]
+    # decision layer runs the six-stem role map...
+    assert set(entry["roles"]) == {"lead", "rhythm", "low", "bed"}
+    # ...while execution stays on the four stems the model actually emits
+    assert set(entry["target_gain_db"]) == {"vocals", "drums", "bass", "other"}
+    # guitar/piano are silent on this model, so drums always owns rhythm
+    assert entry["roles"]["rhythm"] == "drums"
+    assert entry["roles"]["lead"] in {"vocals", "other"}
+    # contrast-only policy: execution targets never boost
+    assert all(value <= 1e-9 for value in entry["target_gain_db"].values())

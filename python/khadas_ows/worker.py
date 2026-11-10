@@ -325,7 +325,7 @@ class StreamingWindowManager:
         self.scenario_start_s = float(scenario_start_s)
         self.scenario_end_s = float(scenario_end_s)
         self.strategy_strength = float(strategy_strength)
-        self.role_tracker = role_strategy.RoleTracker()
+        self.role_tracker = role_strategy.RoleTracker(role_map=role_strategy.ROLE_MAP6)
         self.envelope = role_strategy.EnvelopeFollower()
         if policy not in ("roles", "s3"):
             raise WorkerError(f"policy must be 'roles' or 's3', got {policy!r}")
@@ -560,13 +560,19 @@ class StreamingWindowManager:
             stem_signal = istft(masks[0, index].astype(np.complex64) * spectrum, pcm_frames)
             rms = float(np.sqrt((np.asarray(stem_signal, dtype=np.float64) ** 2).mean()))
             stats_db[stem] = 20.0 * np.log10(max(rms, 1e-12))
-        roles = self.role_tracker.update(stats_db)
+        # Six-stem strategy schema (Mac stem_remix parity): the four-stem model leaves
+        # guitar/piano silent, so the role decision degrades to the legacy four-role
+        # map through the same code path a real six-stem model will use.
+        stats6 = {stem: stats_db.get(stem, role_strategy.SILENT_DB)
+                  for stem in role_strategy.STEMMS6}
+        roles = self.role_tracker.update(stats6)
         # 2) scenario gain targets (contrast-only: attenuate competitors, never boost)
         t0 = self.samples_processed / SAMPLE_RATE
         active = role_strategy.scenario_active(t0, self.scenario_start_s, self.scenario_end_s)
         if active:
-            raw = role_strategy.role_profile(roles, self.scenario)
-            target = role_strategy.contrast_only_profile(raw, self.strategy_strength)
+            raw6 = role_strategy.role_profile6(roles, self.scenario)
+            target6 = role_strategy.contrast_only_profile6(raw6, self.strategy_strength)
+            target = role_strategy.fold_to_execution(target6)
         else:
             target = {stem: 0.0 for stem in role_strategy.STEMMS}
         # 3) envelope-shaped per-frame gains (attack 400 ms / release 1200 ms)
