@@ -58,6 +58,8 @@ FREQ_BINS = N_FFT // 2 + 1
 MODEL_CHANNELS = 2
 MODEL_FRAMES = 345  # fixed time axis of the exported model
 STEMS = 4  # masks[0] = vocals for this probe
+#: 面板档位控制（node POST /v1/tuning 写入）：/tmp/tuning-control.json
+TUNING_CONTROL_PATH = "/tmp/tuning-control.json"
 WINDOW_SECONDS = MODEL_FRAMES * HOP / SAMPLE_RATE  # 4.005 s
 
 
@@ -340,6 +342,8 @@ class StreamingWindowManager:
         self.stem_frame_gains = np.zeros(
             (board_tuning.STEM_COUNT, board_tuning.BAND_COUNT), dtype=np.float64)
         self.last_tuning: dict = {"mode": "FLAT", "stale": True}
+        #: 最近一次从面板同步到的板端 tuner 参数（遥测回显，便于 Mac 核对）。
+        self.last_control: dict = {}
         # 10 Hz control loop: the tuner decision cadence is decoupled from the 1 s audio
         # packet cadence, so a noise/event change reaches the Mac in ~100 ms instead of
         # waiting for the next 0.9 s hop (user feedback: change latency must match S3).
@@ -491,6 +495,8 @@ class StreamingWindowManager:
             "applied_cut": int(np.sum(target < -0.3)),
             "masking_peak_db": round(float(np.max(result["masking_db"])), 2),
             "exposure": round(float(result.get("exposure", 0.0)), 3),
+            # 面板档位同步回显：Mac 可核对"基础/激进"是否真的改到板端 depth/dose。
+            "control": dict(self.last_control),
             "band_db": [round(float(v), 2) for v in target],
             "device_db": [round(float(v), 2)
                           for v in np.asarray(result.get("device_db", target))],
@@ -515,10 +521,38 @@ class StreamingWindowManager:
         except OSError:
             pass
 
+    def _apply_tuning_control(self) -> None:
+        """面板档位 -> 板端 tuner 的 depth/dose（/tmp/tuning-control.json）。
+
+        Mac 只在切换 基础/激进 时写这个文件；读不到就保留 worker 启动参数。
+        数值在这里再夹一次，坏文件/非法值不会把调音推到危险区间。
+        """
+        try:
+            payload = json.loads(Path(TUNING_CONTROL_PATH).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return
+        if not isinstance(payload, dict):
+            return
+        depth = payload.get("depth")
+        dose = payload.get("masking_dose")
+        max_positive = payload.get("max_positive_db")
+        if isinstance(depth, (int, float)) and not isinstance(depth, bool):
+            self.tuner.depth = max(1.0, min(4.0, float(depth)))
+        if isinstance(dose, (int, float)) and not isinstance(dose, bool):
+            self.tuner.masking_dose = max(0.5, min(2.0, float(dose)))
+        if isinstance(max_positive, (int, float)) and not isinstance(max_positive, bool):
+            self.tuner.max_positive_db = max(1.0, min(6.0, float(max_positive)))
+        self.last_control = {
+            "depth": self.tuner.depth,
+            "masking_dose": self.tuner.masking_dose,
+            "max_positive_db": self.tuner.max_positive_db,
+        }
+
     def _control_loop(self) -> None:
         """10 Hz: DMIC evidence + latest content features -> tuner -> telemetry."""
         while True:
             try:
+                self._apply_tuning_control()
                 with self._features_lock:
                     features = self.latest_features
                 if features is not None:

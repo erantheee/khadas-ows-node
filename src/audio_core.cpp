@@ -198,6 +198,49 @@ bool read_number_field(const std::string& body, const char* key, float& value) {
     return true;
 }
 
+// ---------------------------------------------------------------------------
+// POST /v1/tuning: the panel's 基础/激进 gear -> board-side tuner strength.
+// The worker watches /tmp/tuning-control.json (10 Hz loop) and re-clamps the
+// values; the Mac sends only on gear changes, so a missing file simply keeps
+// the worker's CLI defaults (board offline / old host compatibility).
+// ---------------------------------------------------------------------------
+struct TuningControl {
+    float depth = 1.3f;
+    float masking_dose = 1.0f;
+    float max_positive_db = 3.0f;
+};
+
+bool parse_tuning_control_json(const std::string& body, TuningControl& control) {
+    if (!read_number_field(body, "depth", control.depth)) return false;
+    if (!read_number_field(body, "masking_dose", control.masking_dose)) return false;
+    if (!read_number_field(body, "max_positive_db", control.max_positive_db)) return false;
+    if (control.depth < 1.0f || control.depth > 4.0f) return false;
+    if (control.masking_dose < 0.5f || control.masking_dose > 2.0f) return false;
+    if (control.max_positive_db < 1.0f || control.max_positive_db > 6.0f) return false;
+    return true;
+}
+
+bool write_tuning_control(const TuningControl& control) {
+    namespace fs = std::filesystem;
+    const auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
+    const std::string payload = "{\"depth\":" + std::to_string(control.depth) +
+        ",\"masking_dose\":" + std::to_string(control.masking_dose) +
+        ",\"max_positive_db\":" + std::to_string(control.max_positive_db) +
+        ",\"ts_ms\":" + std::to_string(now_ms) + "}";
+    const std::string path = "/tmp/tuning-control.json";
+    const std::string writing = path + ".writing";
+    {
+        std::ofstream file(writing, std::ios::binary | std::ios::trunc);
+        if (!file) return false;
+        file << payload;
+        if (!file) return false;
+    }
+    std::error_code error;
+    fs::rename(writing, path, error);
+    return !error;
+}
+
 bool read_string_field(const std::string& body, const char* key, std::string& value) {
     std::size_t pos = 0;
     if (!json_value_position(body, key, pos)) return true; // absent keeps the default
@@ -395,6 +438,19 @@ void handle_http_client(AudioCore& core, int fd) {
         } else {
             core.ingest_evidence(evidence, dt_ms);
             payload = core.status_json();
+        }
+    } else if (request.rfind("POST /v1/tuning ", 0) == 0) {
+        TuningControl control;
+        if (!parse_tuning_control_json(body, control)) {
+            code = 400;
+            payload = "{\"error\":\"expected depth 1-4, masking_dose 0.5-2, max_positive_db 1-6\"}";
+        } else if (!write_tuning_control(control)) {
+            code = 400;
+            payload = "{\"error\":\"cannot write /tmp/tuning-control.json\"}";
+        } else {
+            payload = "{\"ok\":true,\"depth\":" + std::to_string(control.depth) +
+                      ",\"masking_dose\":" + std::to_string(control.masking_dose) +
+                      ",\"max_positive_db\":" + std::to_string(control.max_positive_db) + "}";
         }
     } else {
         code = 404;
