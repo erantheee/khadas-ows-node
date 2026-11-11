@@ -208,3 +208,28 @@ delivery had visible PUA output, and **do not record a rating/score**.
   instead of shipping a "fix" for a nonexistent defect; reported the residual decomposition
   (gain vs independent noise) with numbers.
 - Rating: **not recorded** (user instruction: 不记录评分).
+
+## 2026-11-11 (fourth record) — envelope parameter sweep: offline gains are small on-board
+
+- Sweep (offline, Dukou 60 s + local ONNX masks, 8 configs varying attack/release, gain smoothing,
+  gating): best = slow envelope 800/2000 ms + 5-frame gain smoothing + low-level gate
+  (floor −45 / full −25 dB re window peak). Offline quiet-passage residual improved
+  −17.8 → −18.2 dB and per-STFT-frame gain ripple halved (2.37 → 1.31).
+- Implemented as worker flags: `--attack-ms`, `--release-ms`, `--gain-smooth-frames`
+  (plus the existing `--gate-floor-db/--gate-full-db`), wired into the envelope follower and a
+  moving-average smoother on the per-frame gains.
+- On-board verification (Dukou 60 s, NPU, zero fallbacks):
+  - default 400/1200: residual −18.8 dB, quiet-passage −18.5 dB, gain ripple 0.86 dB
+  - optimal 800/2000 + smooth 5 + gate: residual −18.9 dB, quiet-passage −18.8 dB, ripple 0.87 dB
+  → the offline gain mostly does not survive on-board (0.3 dB quiet-passage improvement, ripple
+  unchanged at 1 s granularity). The dominant on-board difference from the original is the
+  −1 dB role gain itself, not added noise.
+- Reading: the audible "slight noise floor" is the time-varying spectral gain's residual
+  (−18.8 dB relative to signal, mostly the intentional −1 dB attenuation plus modulation), not a
+  numerical or reconstruction artifact (both measured clean: −138 dB reconstruction, 1.000000
+  ORT↔NPU). Parameter tuning has hit diminishing returns; further reduction needs a different
+  processing structure (static-gain default with scenario-triggered ramps), not more parameter
+  search.
+- PUA output visible: yes — swept, deployed, measured on-board, reported that the offline
+  improvement largely vanished rather than claiming the tuning win.
+- Rating: **not recorded** (user instruction: 不记录评分).

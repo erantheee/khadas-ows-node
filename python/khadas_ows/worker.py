@@ -317,6 +317,9 @@ class StreamingWindowManager:
         stream_overlap_frames: int = 0,
         gate_floor_db: float = -45.0,
         gate_full_db: float = -25.0,
+        attack_ms: float = 400.0,
+        release_ms: float = 1200.0,
+        gain_smooth_frames: int = 0,
         output_gain: str = "peak",
         output_mode: str = "stem",
         scenario: str = "quiet",
@@ -344,7 +347,9 @@ class StreamingWindowManager:
         self.scenario_end_s = float(scenario_end_s)
         self.strategy_strength = float(strategy_strength)
         self.role_tracker = role_strategy.RoleTracker(role_map=role_strategy.ROLE_MAP6)
-        self.envelope = role_strategy.EnvelopeFollower(stems=role_strategy.STEMMS6)
+        self.envelope = role_strategy.EnvelopeFollower(
+            attack_ms=float(attack_ms), release_ms=float(release_ms),
+            stems=role_strategy.STEMMS6)
         if policy not in ("roles", "s3"):
             raise WorkerError(f"policy must be 'roles' or 's3', got {policy!r}")
         self.policy = policy
@@ -381,6 +386,9 @@ class StreamingWindowManager:
         self._stream_tail: np.ndarray | None = None
         # Low-level gate (dB relative to the window peak): below floor the processing target
         # fades to bypass so quiet passages are not textured by the time-varying spectral gain.
+        self.attack_ms = float(attack_ms)
+        self.release_ms = float(release_ms)
+        self.gain_smooth_frames = int(gain_smooth_frames)
         self.gate_floor_db = float(gate_floor_db)
         self.gate_full_db = float(gate_full_db)
         if not self.gate_floor_db < self.gate_full_db:
@@ -725,6 +733,10 @@ class StreamingWindowManager:
             gated = {stem: target[stem] * g for stem in exec_stems}
             applied = self.envelope.step(gated, HOP / SAMPLE_RATE)
             gain_frames[:, frame_index] = [applied[stem] for stem in exec_stems]
+        if self.gain_smooth_frames > 1:
+            k = np.ones(self.gain_smooth_frames, dtype=np.float32) / self.gain_smooth_frames
+            for s in range(n_stems):
+                gain_frames[s] = np.convolve(gain_frames[s], k, mode="same")
         linear = (10.0 ** (gain_frames / 20.0)).astype(np.float32)  # [n_stems, T]
         weights = np.einsum("st,sft->ft", linear, masks[0])  # [1025,T]
         if weights.shape != spectrum.shape[-2:]:
@@ -849,6 +861,10 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--window-frames", type=int, default=MODEL_FRAMES, help=f"fixed model window (default {MODEL_FRAMES})")
     parser.add_argument("--window-hop", type=int, default=None, help="frames between windows (default = window-frames)")
+    parser.add_argument("--attack-ms", type=float, default=400.0, help="envelope attack time")
+    parser.add_argument("--release-ms", type=float, default=1200.0, help="envelope release time")
+    parser.add_argument("--gain-smooth-frames", type=int, default=0,
+                        help="moving-average window (STFT frames) applied to the envelope gains")
     parser.add_argument("--gate-floor-db", type=float, default=-45.0,
                         help="frame level (dB re window peak) below which processing fades to bypass")
     parser.add_argument("--gate-full-db", type=float, default=-25.0,
@@ -919,6 +935,8 @@ def main(argv: list[str] | None = None) -> int:
             backend, window_frames=args.window_frames, window_hop=args.window_hop,
             stream_overlap_frames=args.stream_overlap_frames,
             gate_floor_db=args.gate_floor_db, gate_full_db=args.gate_full_db,
+            attack_ms=args.attack_ms, release_ms=args.release_ms,
+            gain_smooth_frames=args.gain_smooth_frames,
             output_gain=output_gain, output_mode=output_mode, scenario=scenario,
             scenario_start_s=args.scenario_start_ms / 1000.0,
             scenario_end_s=args.scenario_end_ms / 1000.0,
