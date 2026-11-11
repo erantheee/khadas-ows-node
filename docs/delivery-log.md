@@ -300,3 +300,25 @@ delivery had visible PUA output, and **do not record a rating/score**.
   the source app, verified detection on three real audio kinds, and stated the accuracy caveat
   instead of calling the heuristic "done".
 - Rating: **not recorded** (user instruction: 不记录评分).
+
+## 2026-11-11 (seventh record) — real-platform matrix: content-type detection validated
+
+- Captured 25 s from four real sources through the Core Audio tap (voice prompts guided the user):
+  QQ Music, NetEase Cloud Music, Apple Podcasts, and a Chrome video page.
+- Detection results (band-energy heuristic, one-window first decision + hysteresis):
+  - QQ Music: low 0.909 / mid 0.071 -> **music** (boost profile)
+  - NetEase Cloud: low 0.688 / mid 0.165 -> **music**
+  - Apple Podcasts: low 0.127 / mid 0.609 -> **podcast** (voice-forward profile)
+  - Chrome video: low 0.083 / mid 0.491 -> **podcast** (this clip was voice-dominant/口播; a
+    music video or film would land in music/video instead)
+- User accepted the result ("OK了"). Agreed framing: the classifier dimension is **content
+  character (voice-dominant / music-dominant / mixed)**, not "platform" — platform names are only
+  used for explicit overrides from a host that knows the source app.
+- Chrome specifics learned: its audio is emitted by the `Google Chrome Helper (...) --type=utility
+  --utility-sub-type=audio.mojom.AudioService` process, so the tap must target that pid
+  (`--target-pid`); `--bundle com.google.Chrome` taps the browser process which produces no audio.
+- Deliverables: A/B renders for each platform under `~/Desktop/platform_ab/`
+  (`<platform>_orig.wav` vs `<platform>_<content>.wav`).
+- PUA output visible: yes — matrix run end-to-end with real audio, detection results reported with
+  the ambiguity (video-as-speech) called out instead of hidden, user accepted.
+- Rating: **not recorded** (user instruction: 不记录评分).

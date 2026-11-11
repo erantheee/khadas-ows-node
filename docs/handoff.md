@@ -193,3 +193,32 @@ docs/listening-material/                  blinded renditions + instructions
 1. **A2DP sink** — work on branch `edge2-a2dp-sink` (created from `main`, not checked out yet).
 2. **Retrain six-stem model** — entry point in `cores3-noise-adapt-demo/docs/handoff.md`
    (2026-11-10 section).
+
+## 2026-11-11 (session close) — NPU chain, six-stem model, listening modes, content detection
+
+- **NPU fidelity root cause fixed**: `rknnlite` float inputs are NHWC; the worker passed NCHW,
+  silently transposing every tensor. With the transpose the RKNN fp16 artifact is numerically
+  identical to ONNX (mask cosine 0.9998, per-stem energy error 0.043 dB, NPU RTF 0.161). Deployed;
+  earlier "NPU unusable" conclusions are void.
+- **Six-stem integration**: worker handles 4/6-stem outputs (`_canonical_masks`, dynamic mask
+  accumulator, envelope execution on the model width); `rk-fused.rknn` (199K params) runs on the
+  board with `--model artifacts/rk-fused.rknn --window-frames 345`.
+- **Listening modes (user-approved)**: `--listening-mode auto|boost|duck`; boost = music profile
+  `{vocals +0.5, drums +0.8, bass +0.8}`; duck = conversation profile
+  `{drums −1.2, bass −0.6, guitar −0.45, piano/other −1.2}`; auto switches duck when DMIC evidence
+  reports `conversation_cue`/`speech_active`; envelope 800/2000 ms, gate off (matches the accepted
+  render). Board startup: `restart_board_worker.sh` (watchdog-driven by crontab).
+- **Content-type layer**: music / podcast / video profiles (`strategy.BOOST_PROFILE`,
+  `PODCAST_PROFILE`, `VIDEO_PROFILE`), auto detection from band energy (low/mid ratios), evidence
+  `content_type` override for hosts that know the app. Real-platform validation: QQ Music/NetEase
+  -> music, Apple Podcasts -> podcast, Chrome video (voice-dominant clip) -> podcast.
+- **Source finding**: the user-provided Dukou WAV is 8 dB louder and thinner in the 500 Hz–2 kHz
+  band than the Apple Music capture (mid share 13.9% vs 20.7%); both have limited 12 kHz+ content
+  (1996 recording). Always A/B against a level-matched high-quality source.
+- **Open**: environment-scene layer (quiet/broadband/keyboard/wind/babble) on top of content types;
+  classifier thresholds tuned on more real samples; model quality (data expansion / bigger
+  architecture) — the 13-track probe model is the current quality ceiling; A/B files should be
+  level-matched before listening.
+- Commits (khadas-ows-node): `effe055` NHWC fix, `a978c33` six-stem worker, `c68598b` streaming
+  overlap, `d32dc7b` gate, `cae8764` envelope params, `76a1eeb` listening modes, `607d7cc`
+  content-type layer.
