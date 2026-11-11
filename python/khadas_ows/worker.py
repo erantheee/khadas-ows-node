@@ -314,6 +314,7 @@ class StreamingWindowManager:
         backend,
         window_frames: int = MODEL_FRAMES,
         window_hop: int | None = None,
+        stream_overlap_frames: int = 0,
         output_gain: str = "peak",
         output_mode: str = "stem",
         scenario: str = "quiet",
@@ -367,6 +368,15 @@ class StreamingWindowManager:
         self.role_history: list[dict] = []
         self.window_frames = int(window_frames)
         self.window_hop = int(window_hop if window_hop is not None else window_frames)
+        # Streaming overlap: process each incoming packet together with the tail of the
+        # previous packet, cross-fading the two independent window reconstructions over the
+        # overlap so packet seams stop producing clicks/noise. 0 keeps the legacy behaviour.
+        self.stream_overlap_frames = int(stream_overlap_frames)
+        if not 0 <= self.stream_overlap_frames < self.window_frames:
+            raise WorkerError(
+                f"stream_overlap_frames must be in [0, window_frames={self.window_frames}), "
+                f"got {self.stream_overlap_frames}")
+        self._stream_tail: np.ndarray | None = None
         if self.window_frames < 1:
             raise WorkerError(f"window_frames must be >= 1, got {self.window_frames}")
         if not 1 <= self.window_hop <= self.window_frames:
@@ -428,6 +438,10 @@ class StreamingWindowManager:
         if channels != MODEL_CHANNELS:
             raise WorkerError(f"the fixed-shape model expects {MODEL_CHANNELS} channels, got {channels}")
         source = pcm[: frames * channels].reshape(-1, channels).T.copy()  # [channels, frames]
+        if self.stream_overlap_frames > 0:
+            if self.output_mode != "envelope":
+                raise WorkerError("--stream-overlap-frames requires --output-mode envelope")
+            return self._process_streaming(source)
         spectrum = stft(source)  # complex64 [2,1025,T]
         magnitude = np.abs(spectrum)
         masks = self.masks(magnitude)  # [1,4,1025,T]
@@ -452,6 +466,58 @@ class StreamingWindowManager:
             output = (vocals * scale).T
         return np.ascontiguousarray(output, dtype="<f4").reshape(-1)
 
+
+    def _process_window(self, window: np.ndarray) -> np.ndarray:
+        """Fully process one model window ([2, W] PCM) -> [2, W] processed PCM."""
+        spectrum = stft(window)
+        masks = self.masks(np.abs(spectrum))
+        if self.policy == "s3":
+            out = self._s3_output(spectrum, masks, window.shape[-1])
+        else:
+            out = self._envelope_output(spectrum, masks, window.shape[-1])
+        self.samples_processed += window.shape[-1]
+        return np.asarray(out, dtype=np.float32).T  # [2, W]
+
+    def _process_streaming(self, source: np.ndarray) -> np.ndarray:
+        """Seam-free streaming: overlap the previous packet tail, cross-fade two windows.
+
+        Legacy behaviour processes every packet as an independent STFT/ISTFT window, so the
+        packet seams are discontinuous (measured |diff| ~4x the in-signal average). Here each
+        packet is processed together with the previous tail so the two reconstructions overlap
+        by `stream_overlap_frames` and cross-fade, keeping output length == input length.
+        """
+        _, frames = source.shape
+        window = self.window_frames * HOP
+        overlap = self.stream_overlap_frames * HOP
+        if overlap >= window:
+            raise WorkerError("stream overlap must be smaller than the model window")
+        tail = (self._stream_tail if self._stream_tail is not None
+                else np.zeros((source.shape[0], overlap), dtype=np.float32))
+        merged = np.concatenate([tail, source], axis=1)  # [2, overlap + frames]
+        needed = overlap + window
+        if merged.shape[1] < needed:
+            pad = np.zeros((source.shape[0], needed - merged.shape[1]), dtype=np.float32)
+            merged = np.concatenate([merged, pad], axis=1)
+        win_a = merged[:, :window]
+        win_b = merged[:, overlap:overlap + window]
+        out_a = self._process_window(win_a)
+        out_b = self._process_window(win_b)
+        out = np.zeros((source.shape[0], frames), dtype=np.float32)
+        cross = min(overlap, frames)
+        if cross > 0:
+            n = np.arange(cross, dtype=np.float64)
+            fade = (0.5 - 0.5 * np.cos(np.pi * n / max(cross, 1))).astype(np.float32)
+            out[:, :cross] = (out_a[:, overlap:overlap + cross] * (1.0 - fade[None, :])
+                              + out_b[:, :cross] * fade[None, :])
+        if frames > cross:
+            out[:, cross:] = out_b[:, cross:frames]
+        # Keep the tail of the *input* for the next packet's overlap window.
+        if frames >= overlap:
+            self._stream_tail = source[:, frames - overlap:].copy()
+        else:
+            merged_tail = np.concatenate([tail, source], axis=1)
+            self._stream_tail = merged_tail[:, -overlap:].copy() if overlap else None
+        return np.ascontiguousarray(out.T, dtype="<f4").reshape(-1)
 
     def _s3_output(self, spectrum: np.ndarray, masks: np.ndarray, pcm_frames: int) -> np.ndarray:
         if int(masks.shape[1]) != board_tuning.STEM_COUNT:
@@ -763,6 +829,9 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--window-frames", type=int, default=MODEL_FRAMES, help=f"fixed model window (default {MODEL_FRAMES})")
     parser.add_argument("--window-hop", type=int, default=None, help="frames between windows (default = window-frames)")
+    parser.add_argument("--stream-overlap-frames", type=int, default=0,
+                        help="overlap the previous packet tail and cross-fade window seams "
+                             "(0 = legacy per-packet reconstruction)")
     parser.add_argument(
         "--output-mode",
         choices=("stem", "envelope"),
@@ -824,6 +893,7 @@ def main(argv: list[str] | None = None) -> int:
         backend = make_backend(backend_name, args.model, expected_sha)
         manager = StreamingWindowManager(
             backend, window_frames=args.window_frames, window_hop=args.window_hop,
+            stream_overlap_frames=args.stream_overlap_frames,
             output_gain=output_gain, output_mode=output_mode, scenario=scenario,
             scenario_start_s=args.scenario_start_ms / 1000.0,
             scenario_end_s=args.scenario_end_ms / 1000.0,

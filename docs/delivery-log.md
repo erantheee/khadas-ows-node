@@ -183,3 +183,28 @@ delivery had visible PUA output, and **do not record a rating/score**.
   (`worker_protocol` → mask-shape guard; `ring_overflow` → chunk mismatch) instead of calling the
   start a success, and reported end-to-end numbers.
 - Rating: **not recorded** (user instruction: 不记录评分).
+
+## 2026-11-11 (third record) — streaming overlap implemented; seam diagnosis was a false alarm
+
+- Implemented: `--stream-overlap-frames` (default 0 = legacy). Each packet is processed together
+  with the previous packet's tail; two window reconstructions overlap and cross-fade with a
+  raised-cosine fade; output length == input length. Deployed to the board
+  (`--stream-overlap-frames 172`), worker RTF 0.29 -> 0.87 (two model windows per packet).
+- **Correction to the previous record**: the "4 s packet seams |diff| 1000 vs mean 274" was a
+  false alarm. Per-boundary comparison against the *original* track shows those positions are
+  drum transients of the music itself (original |diff| 1128–1164 at 1234800 / 1411200 /
+  2469600 samples); the processed output is ~0.9x of the original at every boundary (pure gain
+  scaling). There is no seam artifact on this material — the streaming change is infrastructure
+  for a future small-window mode, not a fix for an observed defect.
+- The real residual: fitted gain g = 0.8905 (−1.01 dB); after removing that gain, residual noise
+  is **−28.7 dB relative to signal**, and in the quietest 20% frames the independent noise is
+  **−13.1 dB relative to signal** — audible as a "slight noise floor". Its source is the
+  time-varying spectral gain application (envelope modulation multiplies per-frame per-bin
+  gains, which smears transients and adds texture), not NPU numerics (ORT vs NPU render corr
+  1.000000).
+- Candidate fixes: (a) silence/low-level gating (bypass below a threshold), (b) slower
+  attack/release, (c) smoother gain interpolation across frequency.
+- PUA output visible: yes — corrected my own seam diagnosis using the original-signal baseline
+  instead of shipping a "fix" for a nonexistent defect; reported the residual decomposition
+  (gain vs independent noise) with numbers.
+- Rating: **not recorded** (user instruction: 不记录评分).
