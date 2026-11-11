@@ -315,6 +315,8 @@ class StreamingWindowManager:
         window_frames: int = MODEL_FRAMES,
         window_hop: int | None = None,
         stream_overlap_frames: int = 0,
+        gate_floor_db: float = -45.0,
+        gate_full_db: float = -25.0,
         output_gain: str = "peak",
         output_mode: str = "stem",
         scenario: str = "quiet",
@@ -377,6 +379,13 @@ class StreamingWindowManager:
                 f"stream_overlap_frames must be in [0, window_frames={self.window_frames}), "
                 f"got {self.stream_overlap_frames}")
         self._stream_tail: np.ndarray | None = None
+        # Low-level gate (dB relative to the window peak): below floor the processing target
+        # fades to bypass so quiet passages are not textured by the time-varying spectral gain.
+        self.gate_floor_db = float(gate_floor_db)
+        self.gate_full_db = float(gate_full_db)
+        if not self.gate_floor_db < self.gate_full_db:
+            raise WorkerError(
+                f"gate_floor_db ({self.gate_floor_db}) must be < gate_full_db ({self.gate_full_db})")
         if self.window_frames < 1:
             raise WorkerError(f"window_frames must be >= 1, got {self.window_frames}")
         if not 1 <= self.window_hop <= self.window_frames:
@@ -701,10 +710,20 @@ class StreamingWindowManager:
                       else role_strategy.fold_to_execution(target6))
         else:
             target = {stem: 0.0 for stem in exec_stems}
-        # 3) envelope-shaped per-frame gains (attack 400 ms / release 1200 ms)
+        # 2b) low-level gate: scale the target by how far the frame sits below the window peak.
+        # Quiet frames fade the processing to bypass, so the time-varying spectral gain does
+        # not add its modulation texture to silent passages (measured -13 dB residual there).
+        frame_energy = np.mean(np.abs(spectrum) ** 2, axis=(0, 1)).astype(np.float64)  # [T]
+        peak = max(float(frame_energy.max()), 1e-20)
+        rel_db = 10.0 * np.log10(np.maximum(frame_energy / peak, 1e-20))
+        span = max(self.gate_full_db - self.gate_floor_db, 1e-6)
+        gate = np.clip((rel_db - self.gate_floor_db) / span, 0.0, 1.0)  # [T]
+        # 3) envelope-shaped per-frame gains (attack 400 ms / release 1200 ms), gated
         gain_frames = np.zeros((n_stems, stft_frames), dtype=np.float32)
         for frame_index in range(stft_frames):
-            applied = self.envelope.step(target, HOP / SAMPLE_RATE)
+            g = float(gate[frame_index])
+            gated = {stem: target[stem] * g for stem in exec_stems}
+            applied = self.envelope.step(gated, HOP / SAMPLE_RATE)
             gain_frames[:, frame_index] = [applied[stem] for stem in exec_stems]
         linear = (10.0 ** (gain_frames / 20.0)).astype(np.float32)  # [n_stems, T]
         weights = np.einsum("st,sft->ft", linear, masks[0])  # [1025,T]
@@ -718,6 +737,7 @@ class StreamingWindowManager:
             "stem_count": n_stems,
             "roles": roles,
             "stem_rms_db": {stem: round(stats_db[stem], 2) for stem in exec_stems},
+            "gate_mean": round(float(gate.mean()), 3),
             "target_gain_db": {stem: round(float(target[stem]), 2) for stem in exec_stems},
             "applied_gain_db_last_frame": {stem: round(float(gain_frames[i, -1]), 2)
                                            for i, stem in enumerate(exec_stems)},
@@ -829,6 +849,10 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--window-frames", type=int, default=MODEL_FRAMES, help=f"fixed model window (default {MODEL_FRAMES})")
     parser.add_argument("--window-hop", type=int, default=None, help="frames between windows (default = window-frames)")
+    parser.add_argument("--gate-floor-db", type=float, default=-45.0,
+                        help="frame level (dB re window peak) below which processing fades to bypass")
+    parser.add_argument("--gate-full-db", type=float, default=-25.0,
+                        help="frame level (dB re window peak) at which full processing strength applies")
     parser.add_argument("--stream-overlap-frames", type=int, default=0,
                         help="overlap the previous packet tail and cross-fade window seams "
                              "(0 = legacy per-packet reconstruction)")
@@ -894,6 +918,7 @@ def main(argv: list[str] | None = None) -> int:
         manager = StreamingWindowManager(
             backend, window_frames=args.window_frames, window_hop=args.window_hop,
             stream_overlap_frames=args.stream_overlap_frames,
+            gate_floor_db=args.gate_floor_db, gate_full_db=args.gate_full_db,
             output_gain=output_gain, output_mode=output_mode, scenario=scenario,
             scenario_start_s=args.scenario_start_ms / 1000.0,
             scenario_end_s=args.scenario_end_ms / 1000.0,
