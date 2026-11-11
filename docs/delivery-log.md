@@ -46,3 +46,86 @@ delivery had visible PUA output, and **do not record a rating/score**.
 - PUA output visible in this delivery: yes (byte-flavored data tables and the diagnosis→action
   narration around the drums analysis).
 - Rating: **not recorded** (user instruction: 不记录评分).
+
+## 2026-11-10 — six-stem ONNX → RKNN converted ON-DEVICE (aarch64) + NPU bench
+
+- Delivery:
+  1. **RKNN conversion runs on the Edge2 itself** (aarch64 Ubuntu 24.04, Python 3.12) — no
+     x86_64 host needed. Official Rockchip wheel
+     `rknn_toolkit2-2.5.0-cp312-cp312-manylinux_2_17_aarch64...whl` (from the repo's
+     `packages/arm64`; the GitHub release has no assets) installed into an isolated
+     `~/rknn-convert-env` with numpy 1.26.4, onnx 1.18.0, onnxruntime 1.19.2, protobuf 4.25.4,
+     setuptools<80.1, opencv-python-headless, torch 2.15 aarch64.
+     `tools/convert_rknn.py` extended with `--stems` for the six-stem output boundary.
+     Conversion: 41.4 s → `artifacts/six/candidate-6s.fp.rknn` (25.3 MB, sha256 `4c5abd16…`).
+  2. **On-board NPU bench** (`tools/bench_six_rknn.py`, RKNN-Toolkit-Lite2): output
+     `(1,6,1025,345)`, finite, mask-sum max err 7.2e-4, **per-window 1.061 s / 4.005 s →
+     RTF 0.265** on `NPU_CORE_0` (librknnrt 2.5.0, driver 0.9.8, target rk3588). The 4-stem
+     candidate measured RTF 0.24 — six stems cost ~nothing at this boundary, matching the
+     +0.05 % MAC estimate.
+  3. RKNN(fp16) vs ONNXRuntime cross-check on the same input: **cosine 0.9982, max_abs 0.165**
+     (random-noise input; real-audio listening check still open).
+- Evidence: `artifacts/six/convert.json`, `artifacts/six/bench.json` (board);
+  `models/six/candidate-6s.onnx`; `tools/convert_rknn.py --stems`; `tools/bench_six_rknn.py`.
+- Known limits: the artifact wraps the 9-track pseudo-label student (piano/other SDR broken),
+  so this delivery proves the **deployment path**, not separation quality. The fp16 deviation
+  on random input (0.165) is larger than the 4-stem simulator parity (4.2e-4) and needs a
+  real-audio check.
+- PUA output visible: yes — `[PUA-DIAGNOSIS]` before the conversion hunt, the dependency
+  ladder reported step by step (torch → cv2 → pkg_resources → onnxruntime → protobuf), and
+  "deployment path ≠ quality" stated instead of dressed up as success.
+- Rating: **not recorded** (user instruction: 不记录评分).
+
+## 2026-11-10 (second record) — on-device RKNN path works, but fp16 fidelity is NOT acceptable (P0)
+
+- Delivery:
+  1. Six-stem RKNN converted **on the board** (aarch64, rknn-toolkit2 2.5.0) and benchmarked:
+     RTF 0.265, output `(1,6,1025,345)`, finite, mask-sum err 7.2e-4 — the deployment path works.
+  2. **P0 finding: RKNN fp16 does not reproduce ONNX numerically on real-audio magnitudes.**
+     Same input (`real_mag.npy`, real music STFT window, 0…82 range): torch↔ONNX **max_abs
+     1.1e-6 / cosine 1.0** (export correct), but **RKNN↔ONNX max_abs 0.999 / cosine 0.904**.
+     Scaled input (÷80): 0.225 / 0.995. Random-unit input: 0.165 / 0.998.
+     `--opt-level 0` conversion produced a bit-identical artifact — not an optimizer-level issue.
+  3. Consequence: the 4-stem artifact (RTF 0.24) was never parity-checked against ONNX on real
+     audio; the same fp16 deviation likely affects it, masked so far by the candidate's ≈0 dB
+     SDR. Earlier CPU/NPU listening comparisons cannot rule this out.
+  4. Started a 40-track train-split pseudo-label expansion (teacher RTF 0.11–0.15 on an idle
+     machine; earlier 0.6–1.3 was load-bound) for the next training round.
+- Planned fix (needs retrain): normalize the model input (log1p or fixed-scale magnitude) so
+  activations stay inside fp16's comfortable range; re-export → re-convert → re-check parity
+  (target cosine >0.999) → listen. Also fix SDR evaluation to ignore near-silent teacher targets
+  (many htdemucs_6s outputs are −70…−90 dB on tracks without piano/guitar).
+- PUA output visible: yes — diagnostic gate, explicit "deployment path ≠ numerical fidelity"
+  call-out, and the reproducible parity matrix (raw / scaled / random / opt0) instead of
+  accepting a green conversion as success.
+- Rating: **not recorded** (user instruction: 不记录评分).
+
+## 2026-11-11 — RK-targeted retrain: NPU fidelity still FAILS; CPU path is real-time
+
+- Delivery:
+  1. Regenerated 13/40 train-split pseudo labels (generation was slowed by host load; stopped to
+     free MPS for training), then trained the RK-targeted recipe (`train_rk.py`: log1p input,
+     4 layers × 96 ch = **199,418 params**, fp16-rounding simulation during training, mask-TV
+     regulariser, 12 epochs): final SDR `{vocals 1.84, drums 0.26, bass 3.82, guitar −8.09,
+     piano −0.78, other 0.17}`. The 13-track set is a pipeline probe, not a quality claim.
+  2. Exported `models/six/rk-6s.onnx` (log1p in-graph; torch↔ONNX 5.96e-8) and converted it on
+     the board: `artifacts/rk/rk-6s.fp.rknn`.
+  3. **NPU acceptance FAILED**: 8-window real-audio parity RKNN vs ONNX cosine 0.928
+     (max_abs 0.753); per-stem 2 s energy error **mean 3.50 dB / max 14.5 dB** (target <0.5 dB;
+     the previous 6-layer model measured 3.88 dB). The fp16-rounding training did **not** make the
+     model robust to RKNN's numerical error — all precision modes (fp16, INT8 w8a8 + real
+     calibration, w16a16i_dfp, fp32 unsupported) remain unusable.
+  4. **However, ONNX Runtime CPU on the Edge2 runs the 199K model in real time: 3.03 s per
+     4.005 s window → RTF 0.755**, with fp32 numerics (torch↔ONNX 1e-6, no envelope distortion).
+     The CPU path is therefore "correct numbers + real time on RK3588-class SoC".
+- Evidence: `work/stem-ab/runs/six_rk/rk_net.pt`, board `artifacts/rk/rk-6s.fp.rknn` +
+  convert report, parity/energy measurements above; listening renders under
+  `~/Desktop/cpu_path_20261111/` (original / CPU vocals / CPU drums / 6-stem mix).
+- Reading: for the cost-down goal the live option is **small model + CPU** (199K params,
+  RTF 0.755 on RK3588S; a cheaper SoC needs a smaller MLP or window). The NPU route stays
+  blocked pending a different toolchain or model structure — do not re-label fp16 conversion
+  success as fidelity success.
+- PUA output visible: yes — acceptance gate stated before the run (energy error <0.5 dB), FAIL
+  reported with numbers, and the CPU real-time measurement run immediately after instead of
+  declaring the NPU route dead.
+- Rating: **not recorded** (user instruction: 不记录评分).
