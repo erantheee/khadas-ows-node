@@ -42,6 +42,7 @@ import struct
 import sys
 import threading
 import time
+from collections import deque
 from pathlib import Path
 
 import numpy as np
@@ -397,6 +398,15 @@ class StreamingWindowManager:
         self.listening_mode = listening_mode
         self.boost_profile = dict(role_strategy.BOOST_PROFILE if boost_gains is None else boost_gains)
         self.duck_profile = dict(role_strategy.DUCK_PROFILE if duck_gains is None else duck_gains)
+        # Content-type profiles (music / podcast / video). Auto-detected from the incoming
+        # stream, or pushed by an upstream host through the evidence file's "content_type".
+        self.content_profiles = {
+            "music": dict(self.boost_profile),
+            "podcast": dict(role_strategy.PODCAST_PROFILE),
+            "video": dict(role_strategy.VIDEO_PROFILE),
+        }
+        self._content_type: str | None = None
+        self._content_history: deque = deque(maxlen=2)
         self.gate_floor_db = float(gate_floor_db)
         self.gate_full_db = float(gate_full_db)
         if not self.gate_floor_db < self.gate_full_db:
@@ -692,6 +702,33 @@ class StreamingWindowManager:
         self._control_started = True
         threading.Thread(target=self._control_loop, name="tuning-control", daemon=True).start()
 
+    def _detect_content(self, spectrum: np.ndarray) -> str:
+        """Classify the incoming stream as music / podcast / video from band energy.
+
+        Heuristic only (no platform information is available on an A2DP sink): music carries
+        substantial 20-200 Hz energy (kick/bass), podcast/voice is mid-dominant with little low
+        end, mixed video sits in between. Three-packet hysteresis prevents flapping.
+        """
+        power = np.abs(spectrum).astype(np.float64) ** 2  # [2, 1025, T]
+        band = power.mean(axis=(0, 2))                     # [1025]
+        freqs = np.arange(band.shape[0]) * (SAMPLE_RATE / N_FFT)
+        total = float(band.sum()) + 1e-20
+        low = float(band[(freqs >= 20) & (freqs < 200)].sum()) / total
+        mid = float(band[(freqs >= 300) & (freqs < 3000)].sum()) / total
+        if low < 0.20 and mid > 0.40:
+            detected = "podcast"
+        elif low > 0.30:
+            detected = "music"
+        else:
+            detected = "video"
+        self._content_history.append(detected)
+        # First window decides immediately; afterwards two agreeing windows are required.
+        if self._content_type is None or (
+                len(self._content_history) == self._content_history.maxlen
+                and len(set(self._content_history)) == 1):
+            self._content_type = detected
+        return self._content_type
+
     def _conversation_active(self) -> bool:
         """True when the board reports an active conversation (DMIC evidence within TTL)."""
         try:
@@ -726,13 +763,26 @@ class StreamingWindowManager:
         stats6 = {stem: stats_db.get(stem, role_strategy.SILENT_DB)
                   for stem in role_strategy.STEMMS6}
         roles = self.role_tracker.update(stats6)
-        # 2) listening-mode target (user-approved A/B on 2026-11-11):
-        #    auto  -> conversation detected ? duck profile : boost profile
-        #    boost -> always boost;  duck -> always duck.
+        # 2) listening target. Priority: explicit mode > conversation duck > content profile.
         t0 = self.samples_processed / SAMPLE_RATE
-        engaged = (self.listening_mode == "duck"
-                   or (self.listening_mode == "auto" and self._conversation_active()))
-        profile = self.duck_profile if engaged else self.boost_profile
+        explicit = None
+        try:
+            evidence = self.tuner.evidence.read() or {}
+            explicit = evidence.get("content_type")
+        except Exception:  # noqa: BLE001
+            explicit = None
+        if self.listening_mode == "duck":
+            engaged, content = True, self._content_type
+        elif self.listening_mode == "boost":
+            engaged, content = False, self._content_type
+        else:
+            content = (explicit if explicit in self.content_profiles
+                       else self._detect_content(spectrum))
+            engaged = self._conversation_active()
+        if engaged:
+            profile = self.duck_profile
+        else:
+            profile = self.content_profiles.get(content, self.boost_profile)
         target = {stem: float(profile.get(stem, 0.0)) for stem in exec_stems}
         # 2b) low-level gate: scale the target by how far the frame sits below the window peak.
         # Quiet frames fade the processing to bypass, so the time-varying spectral gain does
@@ -762,6 +812,7 @@ class StreamingWindowManager:
         self.role_history.append({
             "t_s": round(t0, 3),
             "mode": "duck" if engaged else "boost",
+            "content_type": content,
             "stem_count": n_stems,
             "roles": roles,
             "stem_rms_db": {stem: round(stats_db[stem], 2) for stem in exec_stems},

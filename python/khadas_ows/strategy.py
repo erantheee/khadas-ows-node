@@ -66,6 +66,18 @@ DUCK_PROFILE: dict[str, float] = {
     "guitar": -0.45, "piano": -1.2, "other": -1.2,
 }
 
+#: Content-type gain profiles (platform-independent listening tuning). The relay box infers
+#: music / podcast / video from the incoming audio stream; an upstream host (Mac/PC process
+#: tap) may also push the content type explicitly.
+PODCAST_PROFILE: dict[str, float] = {
+    "vocals": 0.8, "drums": -0.5, "bass": -0.8,
+    "guitar": -0.5, "piano": 0.5, "other": 0.0,
+}
+VIDEO_PROFILE: dict[str, float] = {
+    "vocals": 0.3, "drums": -1.0, "bass": -1.0,
+    "guitar": -0.5, "piano": 0.0, "other": 0.0,
+}
+
 #: Legacy explicit per-role gain tables (`PROFILES` in Mac stem_remix.py), in dB.
 PROFILES: dict[str, dict[str, float]] = {
     "neutral_rebuild": {stem: 0.0 for stem in STEMMS6},

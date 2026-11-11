@@ -270,3 +270,33 @@ delivery had visible PUA output, and **do not record a rating/score**.
   measurement separated file defects from processing defects, and both integration bugs were
   chased down on the live board rather than left as "restart didn't work".
 - Rating: **not recorded** (user instruction: 不记录评分).
+
+## 2026-11-11 (sixth record) — content-type profiles: platform-agnostic tuning layer
+
+- User requirement (2026-11-11): "平台调音能力需要不同" — different playback platforms (QQ Music /
+  Apple Music / podcast / video apps) need different tuning; both link topologies must be supported
+  (iPhone -> relay box over A2DP AND Mac/PC host with process tap).
+- Architecture landed:
+  1. **Content-type profiles** (`strategy.PODCAST_PROFILE`, `VIDEO_PROFILE`, plus the approved
+     `BOOST_PROFILE` for music): music = boost, podcast = voice-forward
+     `{vocals +0.8, drums -0.5, bass -0.8, guitar -0.5, piano +0.5}`, video = dialogue-forward
+     `{vocals +0.3, drums -1.0, bass -1.0, guitar -0.5}`.
+  2. **Relay-side auto detection** (works when the platform is unknown, e.g. A2DP sink):
+     band-energy heuristic on the incoming stream — `low(20–200 Hz) < 0.20 and mid(300–3000 Hz) >
+     0.40` -> podcast; `low > 0.30` -> music; else video; one-window first decision + two-window
+     hysteresis. Verified: Dukou -> music, TTS speech -> podcast, mixed field recording -> video.
+  3. **Upstream override**: the evidence file's `content_type` field takes precedence when a
+     host (Mac/PC process tap) knows the source; manual modes still available via
+     `--listening-mode boost|duck`.
+  4. **Priority chain**: explicit mode > conversation (duck) > content profile. Envelope
+     smoothing (800/2000 ms) covers all switches.
+- Board verification: Dukou 60 s processed with `content_type=music` -> boost targets
+  `{vocals 0.5, drums 0.8, bass 0.8}`; a 20 s mixed recording detected as `video` -> video
+  targets `{vocals 0.3, drums -1.0, bass -1.0, guitar -0.5}`; `actual_mode=npu`, no fallbacks.
+- Still open: (a) real platform matrix test (QQ/Apple Music/podcast/video app via the Mac tap),
+  (b) environment-scene layer (quiet/broadband/keyboard/wind/babble) on top of content types,
+  (c) classification accuracy on real platform audio (heuristic thresholds are first-cut).
+- PUA output visible: yes — built the platform-agnostic layer because the link cannot always know
+  the source app, verified detection on three real audio kinds, and stated the accuracy caveat
+  instead of calling the heuristic "done".
+- Rating: **not recorded** (user instruction: 不记录评分).
