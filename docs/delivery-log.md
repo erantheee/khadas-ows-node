@@ -155,3 +155,31 @@ delivery had visible PUA output, and **do not record a rating/score**.
   per-depth/per-op probe matrix localized the error to the input boundary, the PC simulator
   produced the decisive error message, and the fix was verified end-to-end with numbers.
 - Rating: **not recorded** (user instruction: 不记录评分).
+
+## 2026-11-11 (second record) — six-stem RK model integrated into the NPU worker
+
+- Delivery:
+  1. Worker now handles both model widths: `_canonical_masks` accepts 4/6-stem outputs
+     (NCHW or NHWC), `masks()` sizes the accumulator from the first window, `_envelope_output`
+     executes on the model's own stem count (6 stems direct, 4 stems folded), `EnvelopeFollower`
+     is parameterised by stem list, and `--policy s3` rejects six-stem masks with a clear error.
+  2. Board: `artifacts/rk-fused.rknn` (199K params, log1p input) deployed; worker restarted with
+     `--model artifacts/rk-fused.rknn --window-frames 345 --policy roles`; start scripts
+     (`~/restart_board_worker.sh`, `~/start_demo.sh` hash) updated so the watchdog boots into the
+     six-stem configuration.
+  3. Verified end-to-end on the board:
+     - worker log: six-stem decisions `roles={lead:vocals, rhythm:guitar, low:bass, bed:guitar}`,
+       applied `{vocals 0, drums −2.4, bass −1.2, guitar −0.9, piano −2.4, other −2.4}` dB
+     - `run_stream --chunk-ms 4005`: PASS, `actual_mode=npu`, RTF 0.33
+     - 6 s music clip through `pcm_client --chunk 176400`: **zero fallbacks**, packets 13,
+       last_rtf 0.456; output vs original corr 0.9996, RMS −0.55 dB, bass band −0.8 dB
+       (role gains applied) — no distortion.
+- Evidence: `logs/worker-npu-rk6.log`, board `/v1/status`, A/B renders `~/Desktop/rk6_npu_ab/`,
+  worker/strategy changes committed.
+- Known limits: model quality still weak (13-track probe); 4 s window = 4 s pipeline latency
+  (throughput probe, not product latency); `ring_overflow` appears when the client chunk cadence
+  does not match the 4 s window.
+- PUA output visible: yes — integrated against live board state, chased the fallback reason
+  (`worker_protocol` → mask-shape guard; `ring_overflow` → chunk mismatch) instead of calling the
+  start a success, and reported end-to-end numbers.
+- Rating: **not recorded** (user instruction: 不记录评分).

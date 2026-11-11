@@ -57,7 +57,8 @@ HOP = 512
 FREQ_BINS = N_FFT // 2 + 1
 MODEL_CHANNELS = 2
 MODEL_FRAMES = 345  # fixed time axis of the exported model
-STEMS = 4  # masks[0] = vocals for this probe
+STEMS = 4  # legacy four-stem layout; six-stem RK models report 6
+_SIX_STEMS = ("vocals", "drums", "bass", "guitar", "piano", "other")
 #: 面板档位控制（node POST /v1/tuning 写入）：/tmp/tuning-control.json
 TUNING_CONTROL_PATH = "/tmp/tuning-control.json"
 WINDOW_SECONDS = MODEL_FRAMES * HOP / SAMPLE_RATE  # 4.005 s
@@ -141,16 +142,23 @@ def istft(spectrum: np.ndarray, length: int) -> np.ndarray:
 # Model backends
 # --------------------------------------------------------------------------- #
 def _canonical_masks(value, window_frames: int) -> np.ndarray:
-    """Normalise a backend output to float32 ``[1, STEMS, 1025, window_frames]``."""
+    """Normalise a backend output to float32 ``[1, stems, 1025, window_frames]``.
+
+    Accepts the legacy 4-stem candidate and the six-stem RK model, in either NCHW
+    (ONNX/RKNN native) or NHWC layout.
+    """
     array = np.asarray(value, dtype=np.float32)
     if array.ndim == 3:
         array = array[None, ...]
-    expected = (1, STEMS, FREQ_BINS, window_frames)
-    if array.shape == expected:
+    if array.ndim != 4:
+        raise WorkerError(f"model returned mask rank {array.ndim}; expected 4")
+    if array.shape[1] in (STEMS, len(_SIX_STEMS)) and array.shape[2:] == (FREQ_BINS, window_frames):
         return array
-    if array.shape == (1, FREQ_BINS, window_frames, STEMS):
+    if array.shape[-1] in (STEMS, len(_SIX_STEMS)) and array.shape[1:3] == (FREQ_BINS, window_frames):
         return np.ascontiguousarray(array.transpose(0, 3, 1, 2))
-    raise WorkerError(f"model returned mask shape {array.shape}; expected {expected}")
+    raise WorkerError(
+        f"model returned mask shape {array.shape}; expected "
+        f"(1, 4|6, {FREQ_BINS}, {window_frames}) or NHWC equivalent")
 
 
 class StubBackend:
@@ -333,7 +341,7 @@ class StreamingWindowManager:
         self.scenario_end_s = float(scenario_end_s)
         self.strategy_strength = float(strategy_strength)
         self.role_tracker = role_strategy.RoleTracker(role_map=role_strategy.ROLE_MAP6)
-        self.envelope = role_strategy.EnvelopeFollower()
+        self.envelope = role_strategy.EnvelopeFollower(stems=role_strategy.STEMMS6)
         if policy not in ("roles", "s3"):
             raise WorkerError(f"policy must be 'roles' or 's3', got {policy!r}")
         self.policy = policy
@@ -382,7 +390,7 @@ class StreamingWindowManager:
                 f"expected magnitude [2,{FREQ_BINS},T], got {tuple(magnitude.shape)}"
             )
         total_frames = magnitude.shape[-1]
-        accumulated = np.zeros((STEMS, FREQ_BINS, total_frames), dtype=np.float32)
+        accumulated = None
         weights = np.zeros(total_frames, dtype=np.float32)
         for start in self.window_starts(total_frames):
             window = np.zeros((1, MODEL_CHANNELS, FREQ_BINS, self.window_frames), dtype=np.float32)
@@ -391,6 +399,9 @@ class StreamingWindowManager:
             masks = _canonical_masks(self.backend.run(window), self.window_frames)
             if not np.isfinite(masks).all():
                 raise WorkerError(f"model backend returned non-finite masks (window start {start})")
+            if accumulated is None:
+                accumulated = np.zeros((int(masks.shape[1]), FREQ_BINS, total_frames),
+                                       dtype=np.float32)
             accumulated[:, :, start : start + used] += masks[0, :, :, :used]
             weights[start : start + used] += 1.0
             self.calls.append(
@@ -443,6 +454,10 @@ class StreamingWindowManager:
 
 
     def _s3_output(self, spectrum: np.ndarray, masks: np.ndarray, pcm_frames: int) -> np.ndarray:
+        if int(masks.shape[1]) != board_tuning.STEM_COUNT:
+            raise WorkerError(
+                f"--policy s3 expects {board_tuning.STEM_COUNT}-stem masks, got {masks.shape[1]}; "
+                "use --policy roles with six-stem models")
         """Board-side smart tuner: DMIC noise x separated-content style -> 24-band envelope.
 
         D39 content curve + D41/D48 masking decisions (sources: main/controller.cpp)
@@ -593,15 +608,20 @@ class StreamingWindowManager:
         count (masks.shape[-1]) is what the per-frame gain envelope walks over.
         """
         stft_frames = int(masks.shape[-1])
+        n_stems = int(masks.shape[1])
+        # Execution schema follows the model: the legacy candidate emits 4 stems, the
+        # RK-targeted model emits 6. The role decision always runs on the six-stem schema;
+        # a 4-stem model folds guitar/piano (silent) back into `other`.
+        exec_stems = (role_strategy.STEMMS6 if n_stems == len(role_strategy.STEMMS6)
+                      else role_strategy.STEMMS)
+        if n_stems not in (len(role_strategy.STEMMS), len(role_strategy.STEMMS6)):
+            raise WorkerError(f"model must emit 4 or 6 stems, got {n_stems}")
         # 1) per-stem estimated energy for the role decision (one ISTFT per stem)
         stats_db: dict[str, float] = {}
-        for index, stem in enumerate(role_strategy.STEMMS):
+        for index, stem in enumerate(exec_stems):
             stem_signal = istft(masks[0, index].astype(np.complex64) * spectrum, pcm_frames)
             rms = float(np.sqrt((np.asarray(stem_signal, dtype=np.float64) ** 2).mean()))
             stats_db[stem] = 20.0 * np.log10(max(rms, 1e-12))
-        # Six-stem strategy schema (Mac stem_remix parity): the four-stem model leaves
-        # guitar/piano silent, so the role decision degrades to the legacy four-role
-        # map through the same code path a real six-stem model will use.
         stats6 = {stem: stats_db.get(stem, role_strategy.SILENT_DB)
                   for stem in role_strategy.STEMMS6}
         roles = self.role_tracker.update(stats6)
@@ -611,15 +631,16 @@ class StreamingWindowManager:
         if active:
             raw6 = role_strategy.role_profile6(roles, self.scenario)
             target6 = role_strategy.contrast_only_profile6(raw6, self.strategy_strength)
-            target = role_strategy.fold_to_execution(target6)
+            target = (target6 if n_stems == len(role_strategy.STEMMS6)
+                      else role_strategy.fold_to_execution(target6))
         else:
-            target = {stem: 0.0 for stem in role_strategy.STEMMS}
+            target = {stem: 0.0 for stem in exec_stems}
         # 3) envelope-shaped per-frame gains (attack 400 ms / release 1200 ms)
-        gain_frames = np.zeros((len(role_strategy.STEMMS), stft_frames), dtype=np.float32)
+        gain_frames = np.zeros((n_stems, stft_frames), dtype=np.float32)
         for frame_index in range(stft_frames):
             applied = self.envelope.step(target, HOP / SAMPLE_RATE)
-            gain_frames[:, frame_index] = [applied[stem] for stem in role_strategy.STEMMS]
-        linear = (10.0 ** (gain_frames / 20.0)).astype(np.float32)  # [4, T]
+            gain_frames[:, frame_index] = [applied[stem] for stem in exec_stems]
+        linear = (10.0 ** (gain_frames / 20.0)).astype(np.float32)  # [n_stems, T]
         weights = np.einsum("st,sft->ft", linear, masks[0])  # [1025,T]
         if weights.shape != spectrum.shape[-2:]:
             raise WorkerError(f"envelope weights shape {weights.shape} != spectrum {spectrum.shape[-2:]}")
@@ -628,11 +649,12 @@ class StreamingWindowManager:
         self.role_history.append({
             "t_s": round(t0, 3),
             "scenario": self.scenario if active else "quiet",
+            "stem_count": n_stems,
             "roles": roles,
-            "stem_rms_db": {stem: round(stats_db[stem], 2) for stem in role_strategy.STEMMS},
-            "target_gain_db": {stem: round(target[stem], 2) for stem in role_strategy.STEMMS},
+            "stem_rms_db": {stem: round(stats_db[stem], 2) for stem in exec_stems},
+            "target_gain_db": {stem: round(float(target[stem]), 2) for stem in exec_stems},
             "applied_gain_db_last_frame": {stem: round(float(gain_frames[i, -1]), 2)
-                                           for i, stem in enumerate(role_strategy.STEMMS)},
+                                           for i, stem in enumerate(exec_stems)},
         })
         return remixed.T
 

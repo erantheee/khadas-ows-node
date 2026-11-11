@@ -152,13 +152,15 @@ class EnvelopeFollower:
     and releases to 0 dB when it ends.
     """
 
-    def __init__(self, attack_ms: float = 400.0, release_ms: float = 1200.0) -> None:
+    def __init__(self, attack_ms: float = 400.0, release_ms: float = 1200.0,
+                 stems: tuple[str, ...] | None = None) -> None:
         self.attack_tau = max(float(attack_ms), 1.0) / 1000.0
         self.release_tau = max(float(release_ms), 1.0) / 1000.0
-        self.gains = {stem: 0.0 for stem in STEMMS}
+        self.stems = tuple(stems or STEMMS)
+        self.gains = {stem: 0.0 for stem in self.stems}
 
     def step(self, targets: dict[str, float], dt_s: float) -> dict[str, float]:
-        for stem in STEMMS:
+        for stem in self.stems:
             target = float(targets.get(stem, 0.0))
             current = self.gains[stem]
             tau = self.attack_tau if abs(target) > abs(current) else self.release_tau
