@@ -129,3 +129,29 @@ delivery had visible PUA output, and **do not record a rating/score**.
   reported with numbers, and the CPU real-time measurement run immediately after instead of
   declaring the NPU route dead.
 - Rating: **not recorded** (user instruction: 不记录评分).
+
+## 2026-11-11 (correction) — NPU fidelity was an input-layout BUG, not fp16 precision
+
+- Root cause (found via the RKNN PC simulator): `rknnlite` interprets float inputs as
+  **NHWC** (`data_format` defaults to `'nhwc'`). `RknnLiteBackend.run()` passed the NCHW
+  `[1,2,1025,345]` tensor straight through, so the NPU saw a silently transposed input.
+  Every previous "NPU fidelity failure" (cosine 0.93 / energy error 1.5–3.5 dB, all precision
+  modes, the "envelope distortion" listening) was **measuring a corrupted input**, not
+  RKNN's numerical precision.
+- Fix (deployed to the board): `RknnLiteBackend.run()` transposes NCHW -> NHWC before
+  inference (`data_format=["nhwc"]`); `tools/bench_six_rknn.py` likewise.
+- Re-measured with the fix on the same artifact and same real-audio windows:
+  - worker backend vs ONNX: mask **cosine 0.9998 / max_abs 0.0125** (was 0.928 / 0.75)
+  - per-stem 2 s energy error: **mean 0.043 dB / max 0.076 dB** (was 3.50 dB) → **PASS**
+  - NPU RTF (199K six-stem RK model): **0.161** (0.645 s per 4.005 s window)
+- Consequences:
+  1. The NPU route is viable; the 2026-11-10 "RKNN fp16 FAIL" conclusions above are
+     **superseded** (they measured transposed input).
+  2. Historical NPU evidence (4-stem candidate-v0 soak/stream/CPU-vs-NPU listening) also ran
+     with the wrong layout — re-validate before any product claim.
+  3. Cost-down: the 199K model has 6× real-time headroom on the 6 TOPS NPU, so a 1–2 TOPS
+     tier NPU remains plausible for the next hardware step.
+- PUA output visible: yes — instead of re-tuning training (which was the wrong lever), the
+  per-depth/per-op probe matrix localized the error to the input boundary, the PC simulator
+  produced the decisive error message, and the fix was verified end-to-end with numbers.
+- Rating: **not recorded** (user instruction: 不记录评分).

@@ -225,9 +225,14 @@ class RknnLiteBackend:
         self.run(warmup)
 
     def run(self, magnitude: np.ndarray) -> np.ndarray:
-        payload = np.ascontiguousarray(magnitude, dtype=np.float32)
+        # RKNN's float input layout is NHWC (data_format defaults to 'nhwc'). Passing the
+        # NCHW tensor directly silently reinterprets it and destroys fidelity: measured
+        # mask cosine vs ONNX was 0.93 with NCHW input and 0.9998 with NHWC input on the
+        # same artifact. Transpose is mandatory, not cosmetic.
+        payload = np.ascontiguousarray(
+            np.transpose(magnitude, (0, 2, 3, 1)), dtype=np.float32)
         try:
-            outputs = self._rknn.inference(inputs=[payload], data_format=["nchw"])
+            outputs = self._rknn.inference(inputs=[payload], data_format=["nhwc"])
         except TypeError:  # older RKNNLite builds have no data_format keyword
             outputs = self._rknn.inference(inputs=[payload])
         if not outputs:
