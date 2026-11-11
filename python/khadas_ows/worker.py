@@ -320,6 +320,9 @@ class StreamingWindowManager:
         attack_ms: float = 400.0,
         release_ms: float = 1200.0,
         gain_smooth_frames: int = 0,
+        listening_mode: str = "auto",
+        boost_gains: dict[str, float] | None = None,
+        duck_gains: dict[str, float] | None = None,
         output_gain: str = "peak",
         output_mode: str = "stem",
         scenario: str = "quiet",
@@ -389,6 +392,11 @@ class StreamingWindowManager:
         self.attack_ms = float(attack_ms)
         self.release_ms = float(release_ms)
         self.gain_smooth_frames = int(gain_smooth_frames)
+        if listening_mode not in ("auto", "boost", "duck"):
+            raise WorkerError(f"listening_mode must be auto|boost|duck, got {listening_mode!r}")
+        self.listening_mode = listening_mode
+        self.boost_profile = dict(role_strategy.BOOST_PROFILE if boost_gains is None else boost_gains)
+        self.duck_profile = dict(role_strategy.DUCK_PROFILE if duck_gains is None else duck_gains)
         self.gate_floor_db = float(gate_floor_db)
         self.gate_full_db = float(gate_full_db)
         if not self.gate_floor_db < self.gate_full_db:
@@ -684,6 +692,16 @@ class StreamingWindowManager:
         self._control_started = True
         threading.Thread(target=self._control_loop, name="tuning-control", daemon=True).start()
 
+    def _conversation_active(self) -> bool:
+        """True when the board reports an active conversation (DMIC evidence within TTL)."""
+        try:
+            evidence = self.tuner.evidence.read()
+        except Exception:  # noqa: BLE001 - evidence must never break audio
+            return False
+        if not evidence:
+            return False
+        return bool(evidence.get("conversation_cue") or evidence.get("speech_active"))
+
     def _envelope_output(self, spectrum: np.ndarray, masks: np.ndarray, pcm_frames: int) -> np.ndarray:
         """Stems -> dominant roles -> scenario gains -> envelope-shaped remix.
 
@@ -708,16 +726,14 @@ class StreamingWindowManager:
         stats6 = {stem: stats_db.get(stem, role_strategy.SILENT_DB)
                   for stem in role_strategy.STEMMS6}
         roles = self.role_tracker.update(stats6)
-        # 2) scenario gain targets (contrast-only: attenuate competitors, never boost)
+        # 2) listening-mode target (user-approved A/B on 2026-11-11):
+        #    auto  -> conversation detected ? duck profile : boost profile
+        #    boost -> always boost;  duck -> always duck.
         t0 = self.samples_processed / SAMPLE_RATE
-        active = role_strategy.scenario_active(t0, self.scenario_start_s, self.scenario_end_s)
-        if active:
-            raw6 = role_strategy.role_profile6(roles, self.scenario)
-            target6 = role_strategy.contrast_only_profile6(raw6, self.strategy_strength)
-            target = (target6 if n_stems == len(role_strategy.STEMMS6)
-                      else role_strategy.fold_to_execution(target6))
-        else:
-            target = {stem: 0.0 for stem in exec_stems}
+        engaged = (self.listening_mode == "duck"
+                   or (self.listening_mode == "auto" and self._conversation_active()))
+        profile = self.duck_profile if engaged else self.boost_profile
+        target = {stem: float(profile.get(stem, 0.0)) for stem in exec_stems}
         # 2b) low-level gate: scale the target by how far the frame sits below the window peak.
         # Quiet frames fade the processing to bypass, so the time-varying spectral gain does
         # not add its modulation texture to silent passages (measured -13 dB residual there).
@@ -745,7 +761,7 @@ class StreamingWindowManager:
         remixed = istft(remixed_spec, pcm_frames)  # [2,pcm_frames]
         self.role_history.append({
             "t_s": round(t0, 3),
-            "scenario": self.scenario if active else "quiet",
+            "mode": "duck" if engaged else "boost",
             "stem_count": n_stems,
             "roles": roles,
             "stem_rms_db": {stem: round(stats_db[stem], 2) for stem in exec_stems},
@@ -826,7 +842,7 @@ def serve(manager: StreamingWindowManager, mode: str, backend_name: str, model: 
                         print(
                             f"packet seq={sequence} frames={frames} "
                             f"rtf={elapsed / (frames / SAMPLE_RATE):.3f} "
-                            f"scenario={last['scenario']} roles={last['roles']} "
+                            f"mode={last.get('mode', 'boost')} roles={last['roles']} "
                             f"target_db={last['target_gain_db']} "
                             f"applied_db={last['applied_gain_db_last_frame']}",
                             flush=True,
@@ -861,6 +877,13 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--window-frames", type=int, default=MODEL_FRAMES, help=f"fixed model window (default {MODEL_FRAMES})")
     parser.add_argument("--window-hop", type=int, default=None, help="frames between windows (default = window-frames)")
+    parser.add_argument("--listening-mode", dest="listening_mode",
+                        choices=("auto", "boost", "duck"), default="auto",
+                        help="listening mode: auto (conversation -> duck), boost (always), duck (always)")
+    parser.add_argument("--boost-gains", type=json.loads, default=None,
+                        help="JSON gain map override for boost mode")
+    parser.add_argument("--duck-gains", type=json.loads, default=None,
+                        help="JSON gain map override for duck mode")
     parser.add_argument("--attack-ms", type=float, default=400.0, help="envelope attack time")
     parser.add_argument("--release-ms", type=float, default=1200.0, help="envelope release time")
     parser.add_argument("--gain-smooth-frames", type=int, default=0,
@@ -937,6 +960,8 @@ def main(argv: list[str] | None = None) -> int:
             gate_floor_db=args.gate_floor_db, gate_full_db=args.gate_full_db,
             attack_ms=args.attack_ms, release_ms=args.release_ms,
             gain_smooth_frames=args.gain_smooth_frames,
+            listening_mode=args.listening_mode, boost_gains=args.boost_gains,
+            duck_gains=args.duck_gains,
             output_gain=output_gain, output_mode=output_mode, scenario=scenario,
             scenario_start_s=args.scenario_start_ms / 1000.0,
             scenario_end_s=args.scenario_end_ms / 1000.0,

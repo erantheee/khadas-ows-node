@@ -197,5 +197,7 @@ def test_envelope_roles_policy_runs_six_stem_decision_on_four_stem_model():
     # guitar/piano are silent on this model, so drums always owns rhythm
     assert entry["roles"]["rhythm"] == "drums"
     assert entry["roles"]["lead"] in {"vocals", "other"}
-    # contrast-only policy: execution targets never boost
-    assert all(value <= 1e-9 for value in entry["target_gain_db"].values())
+    # default listening mode without conversation evidence = "boost" (approved profile)
+    assert entry["mode"] == "boost"
+    assert set(entry["target_gain_db"]) == {"vocals", "drums", "bass", "other"}
+    assert entry["target_gain_db"]["drums"] > 0  # boost profile has positive drum gain

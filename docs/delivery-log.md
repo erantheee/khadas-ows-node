@@ -233,3 +233,40 @@ delivery had visible PUA output, and **do not record a rating/score**.
 - PUA output visible: yes — swept, deployed, measured on-board, reported that the offline
   improvement largely vanished rather than claiming the tuning win.
 - Rating: **not recorded** (user instruction: 不记录评分).
+
+## 2026-11-11 (fifth record) — listening modes approved by the user and landed on the board
+
+- User acceptance (A/B with the Apple Music capture, 2026-11-11): **`01_am_duck_50pct` = approved**
+  ("可以了，非常好了"). That is the duck profile: `{drums −1.2, bass −0.6, guitar −0.45,
+  piano −1.2, other −1.2}` dB (half of the old ducking strength); the boost candidate is
+  `{vocals +0.5, drums +0.8, bass +0.8}` dB. Product form confirmed: **boost by default for music,
+  duck when a conversation is detected** (scenario switching).
+- Source finding that framed the A/B: the user-provided Dukou WAV is **8 dB louder, has heavier
+  low end and a thinner 500 Hz–2 kHz band** than the Apple Music capture (RMS 6037 vs 2426; mid
+  share 13.9% vs 20.7%). Both versions have the same (limited) 12 kHz+ content — that is the
+  1996 recording, not a file defect. The earlier "big noise floor" in `00_orig` was a **rendering
+  bug on our side** (int16 double-scaling → 99.9% clipping), fixed and verified sample-identical
+  to the source (max diff 0, SHA256 equal).
+- Implementation:
+  - `strategy.BOOST_PROFILE` / `strategy.DUCK_PROFILE` (approved maps above).
+  - Worker flags `--listening-mode auto|boost|duck`, `--boost-gains/--duck-gains` (JSON override).
+    `auto` reads the board's DMIC evidence (`conversation_cue` or `speech_active`, with the
+    existing evidence TTL) and picks duck vs boost; envelope smoothing handles the transition.
+  - Board startup (deployed): `--listening-mode auto --attack-ms 800 --release-ms 2000
+    --gate-floor-db -100 --gate-full-db -90` (gate effectively off = the accepted render).
+  - Fixed two board-side integration bugs found during bring-up: a missing line-continuation in
+    `restart_board_worker.sh` (worker silently failed to start) and a stale `role_history["scenario"]`
+    key in the packet log (KeyError crashed the worker on the first packet).
+- Board verification (Dukou 60 s, NPU, chunk 176640):
+  - boost mode: log `mode=boost target_db={vocals 0.5, drums 0.8, bass 0.8, ...}`; output vs the
+    same-source ONNX render corr **0.99959**
+  - duck mode: log `mode=duck target_db={drums −1.2, bass −0.6, guitar −0.45, piano −1.2,
+    other −1.2}`; output vs the same-source render corr **0.99986**
+  - node `actual_mode=npu`, zero fallbacks during the runs.
+- Known: render files were peak-normalised during A/B preparation (board output is not), so A/B
+  files differ in absolute level but match in waveform (corr ≥0.9995); A/B listening files should
+  be level-matched before the next round.
+- PUA output visible: yes — user acceptance recorded verbatim, the source-vs-Apple-Music
+  measurement separated file defects from processing defects, and both integration bugs were
+  chased down on the live board rather than left as "restart didn't work".
+- Rating: **not recorded** (user instruction: 不记录评分).

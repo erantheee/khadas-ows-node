@@ -54,6 +54,18 @@ ROLE_MAP6: dict[str, tuple[str, ...]] = {
     "low": ("bass", "drums"),
     "bed": ("other", "guitar", "piano"),
 }
+#: Listening-mode gains (A/B approved on 2026-11-11 with the Apple Music source):
+#: "boost" = default music listening (vocals/drums/bass slightly forward);
+#: "duck"  = conversation mode (fifty percent of the old ducking strength).
+BOOST_PROFILE: dict[str, float] = {
+    "vocals": 0.5, "drums": 0.8, "bass": 0.8,
+    "guitar": 0.0, "piano": 0.0, "other": 0.0,
+}
+DUCK_PROFILE: dict[str, float] = {
+    "vocals": 0.0, "drums": -1.2, "bass": -0.6,
+    "guitar": -0.45, "piano": -1.2, "other": -1.2,
+}
+
 #: Legacy explicit per-role gain tables (`PROFILES` in Mac stem_remix.py), in dB.
 PROFILES: dict[str, dict[str, float]] = {
     "neutral_rebuild": {stem: 0.0 for stem in STEMMS6},
