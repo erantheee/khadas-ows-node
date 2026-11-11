@@ -322,3 +322,20 @@ delivery had visible PUA output, and **do not record a rating/score**.
 - PUA output visible: yes — matrix run end-to-end with real audio, detection results reported with
   the ambiguity (video-as-speech) called out instead of hidden, user accepted.
 - Rating: **not recorded** (user instruction: 不记录评分).
+
+## 2026-11-11 (eighth record) — rap classification verified; stem-energy classifier rejected
+
+- Captured a typical rap track (25 s from QQ Music). Band-energy rule: `low(20–200 Hz)=0.89`,
+  `mid=0.04` -> **music** (boost profile, drums/bass preserved) — the feared misclassification into
+  podcast/video does **not** happen for beat-driven rap, because the kick/bass carries strong low-end.
+- Counter-check of the proposed "stem-energy" classifier (using the six-stem masks): **rejected**.
+  On podcast/voice content the model (trained on music) splits the voice across bass/guitar:
+  podcast mask shares were `vocals 0.45 / bass 0.25 / guitar 0.22`, i.e. a stem-energy rule would
+  classify pure speech as music. The band-energy heuristic stays the classifier for now; note this
+  also documents a model-quality limit (OOD on speech/podcast material).
+- Residual risk documented: a minimal-beat rap with weak low end could still drift toward
+  podcast/video; fixing that properly needs a rhythmic-modulation feature (low-band energy
+  periodicity), not further threshold nudges.
+- PUA output visible: yes — tested the edge case the user asked about with a real rap sample,
+  and rejected my own proposed classifier once the data showed it fails on speech.
+- Rating: **not recorded** (user instruction: 不记录评分).
