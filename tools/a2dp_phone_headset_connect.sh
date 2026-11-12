@@ -5,6 +5,10 @@ set -eu
 
 PHONE_MAC="${1:?phone Bluetooth MAC required}"
 HEADSET_MAC="${2:?headset Bluetooth MAC required}"
+
+# BlueZ main.conf now has AutoEnable=false (the auto-connect policy was reconnecting the
+# phone in a tight loop and glitching A2DP), so the controller must be powered explicitly.
+bluetoothctl power on >/dev/null 2>&1 || true
 ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 DROPIN_DIR="$HOME/.config/wireplumber/bluetooth.lua.d"
 
