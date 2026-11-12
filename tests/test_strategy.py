@@ -178,7 +178,7 @@ def test_environment_from_evidence_priority():
     assert strategy.environment_from_evidence({"event": "wind", "environment": "NOISY"}) == "wind"
     assert strategy.environment_from_evidence({"event": "keyboard"}) == "keyboard"
     assert strategy.environment_from_evidence({"context": "babble", "environment": "LOUD"}) == "babble"
-    assert strategy.environment_from_evidence({"context": "horn"}) == "street"
+    assert strategy.environment_from_evidence({"context": "horn"}) == "office"
     assert strategy.environment_from_evidence({"environment": "LOUD"}) == "office"
     assert strategy.environment_from_evidence({"context": "quiet"}) == "quiet"
 

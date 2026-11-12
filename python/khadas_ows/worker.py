@@ -327,7 +327,7 @@ class StreamingWindowManager:
         gain_smooth_frames: int = 0,
         listening_mode: str = "auto",
         env_decision: str = "on",
-        env_media_guard: str = "on",
+        env_media_guard: str = "off",
         boost_gains: dict[str, float] | None = None,
         duck_gains: dict[str, float] | None = None,
         output_gain: str = "peak",
@@ -997,7 +997,7 @@ def main(argv: list[str] | None = None) -> int:
                         default="on",
                         help="environment contrast from DMIC evidence (default on; off = content only)")
     parser.add_argument("--env-media-guard", dest="env_media_guard", choices=("on", "off"),
-                        default="on",
+                        default="off",
                         help="while media is playing, only trust physical env states "
                              "(quiet/wind/keyboard); demote content-like ones (default on)")
     parser.add_argument("--boost-gains", type=json.loads, default=None,

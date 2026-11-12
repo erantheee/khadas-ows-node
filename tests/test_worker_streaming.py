@@ -283,7 +283,7 @@ def test_media_guard_demotes_content_env_states_during_playback(tmp_path):
                                "event": "quiet", "band_dbfs": [0.0] * 24})
     manager = W.StreamingWindowManager(
         W.StubBackend(), output_mode="envelope", policy="roles",
-        evidence_file=str(evidence))
+        evidence_file=str(evidence), env_media_guard="on")
     manager.process(sine_packet(1.0, amplitude=0.5), CHANNELS)   # hold 2 windows
     manager.process(sine_packet(1.0, amplitude=0.5), CHANNELS)
     entry = manager.role_history[-1]
@@ -297,7 +297,8 @@ def test_media_guard_keeps_physical_env_states_during_playback(tmp_path):
                                "event": "wind", "band_dbfs": [0.0] * 24})
     manager = W.StreamingWindowManager(
         W.StubBackend(), output_mode="envelope", policy="roles",
-        evidence_file=str(evidence))
+        evidence_file=str(evidence), env_media_guard="on")
+    manager.process(sine_packet(1.0, amplitude=0.5), CHANNELS)
     manager.process(sine_packet(1.0, amplitude=0.5), CHANNELS)
     entry = manager.role_history[-1]
     assert entry["environment"] == "wind"

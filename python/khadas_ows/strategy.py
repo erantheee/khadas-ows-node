@@ -90,10 +90,12 @@ ENVIRONMENTS = ("quiet", "speech", "babble", "street", "office", "wind", "keyboa
 #: expressed as attenuation because boosting estimated stems amplifies leakage.
 ENV_MODIFIERS: dict[str, dict[str, float]] = {
     "quiet": {},
-    "speech": {"vocals": 0.0, "drums": -3.0, "bass": -2.5,
-               "guitar": -2.0, "piano": -2.5, "other": -3.0},
-    "babble": {"vocals": 0.0, "drums": -2.0, "bass": -1.5,
-               "guitar": -1.2, "piano": -1.5, "other": -2.0},
+    # Halved 2026-11-12: the full-strength deltas made the mix audibly pump every time
+    # the DMIC heard speech. The layer should read as a gentle duck, not an on/off.
+    "speech": {"vocals": 0.0, "drums": -1.5, "bass": -1.3,
+               "guitar": -1.0, "piano": -1.2, "other": -1.5},
+    "babble": {"vocals": 0.0, "drums": -1.0, "bass": -0.8,
+               "guitar": -0.6, "piano": -0.8, "other": -1.0},
     "street": {"vocals": 0.0, "drums": -1.5, "bass": -2.0,
                "guitar": -1.0, "piano": -1.5, "other": -2.5},
     "office": {"vocals": 0.0, "drums": -1.0, "bass": -1.0,
@@ -130,8 +132,12 @@ def environment_from_evidence(evidence: dict | None) -> str:
         return "keyboard"
     if context == "babble":
         return "babble"
-    if context in ("street", "horn"):
+    if context == "street":
         return "street"
+    if context == "horn":
+        # The board's room has a persistent horn-like ambient (present even while the
+        # phone is silent); treat it as office-level broadband, not street.
+        return "office"
     if environment in ("NOISY", "LOUD") or context in ("other", "steady"):
         return "office"
     if context == "quiet" or environment == "QUIET":
@@ -149,7 +155,7 @@ class EnvironmentTracker:
     expensive than a late release; the release still needs `hold_windows`.
     """
 
-    def __init__(self, hold_windows: int = 2, fast_windows: int = 1) -> None:
+    def __init__(self, hold_windows: int = 3, fast_windows: int = 2) -> None:
         self.hold_windows = max(int(hold_windows), 1)
         self.fast_windows = max(int(fast_windows), 1)
         self.state: str | None = None
