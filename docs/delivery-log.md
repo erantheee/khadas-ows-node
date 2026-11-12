@@ -647,3 +647,26 @@ delivery had visible PUA output, and **do not record a rating/score**.
   an explicit opt-in instead of deleting evidence, and verified the gentler response on the
   board before claiming it.
 - Rating: **not recorded** (user instruction: 不记录评分).
+
+## 2026-11-12 (twelfth record) — chain stabilized; freeze state, do not touch
+
+- User: "一切正常了，不要动了？" — confirmed stable, no further board changes.
+- Final board state (leave as-is):
+  - `/etc/bluetooth/main.conf`: `Enable = Source,Sink,Media,Gateway,Socket`,
+    `AutoEnable=false`. Gateway MUST stay: Ubuntu WirePlumber 0.4 bundles the phone's
+    A2DP source and HFP AG into one "audio-gateway" card profile — removing Gateway
+    removes the A2DP source too (that mistake cost ~30 minutes of silence today).
+  - AutoEnable=false stops the locally-initiated reconnect storm (btmon evidence:
+    MGMT "Device Connected / Connection Locally Initiated" every ~30 ms) without
+    breaking explicit profile connects.
+  - Reboot procedure: `bluetoothctl power on` then
+    `tools/a2dp_phone_headset_connect.sh <PHONE> <HEADSET>` (script now powers the
+    controller itself), then the phone reconnects from its own Bluetooth menu and plays.
+  - relay: self-healing version (`--stall-timeout`, source-loss watch, re-arm loop);
+    worker: env layer softened (horn->office, halved speech deltas, 2-in/3-out tracker),
+    own-playback guard off by default.
+- Verified before freeze: `bluez_input` present, relay `chunks` growing, `underruns=0`,
+  node `actual_mode=npu`, user confirms audio normal.
+- Do not do again: never strip Gateway from `Enable`; never restart bluetooth without
+  re-running the connect script; keep `AutoEnable=false`.
+- Rating: **not recorded** (user instruction: 不记录评分).
