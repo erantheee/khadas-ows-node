@@ -547,3 +547,21 @@ delivery had visible PUA output, and **do not record a rating/score**.
   dropouts are underruns/fallbacks. With the CPU fix and source gating, the next live
   session should be judged on relay underrun counts, not on feel.
 - Rating: **not recorded** (user instruction: 不记录评分).
+
+## 2026-11-12 (eighth record) — silent chain: pactl gate + phone sending digital silence
+
+- Symptom: user reports no sound (after previously hearing direct audio). No rating recorded.
+- Evidence: the phone's A2DP sink-input existed (`media.name = "oowow (codec SBC-XQ)"`) but the
+  sink monitor measured -240 dBFS, i.e. the phone was streaming digital silence; at the same
+  time the direct `bluez_input -> bluez_output` links were absent, and relay PID 13732 was
+  stuck in the new source gate — `pactl list short sources` does NOT list `bluez_input` on
+  this board even when the PipeWire node exists.
+- Fix `63dd9e1`: the relay waits on `pw-cli ls Node` instead of `pactl`, so the gate fires.
+- Recovery performed: relay stopped (direct path left intact), phone A2DP profile (0x110A)
+  disconnected/reconnected, Anker sink re-created (`bluez_output.00_7F_1D_73_48_A0.1`, 2945).
+  State after recovery: both devices connected, sink SUSPENDED (idle), dmic_evidence 8.5 % CPU,
+  load 0.19, no relay. The relay will be started after the user confirms audible direct audio,
+  so a processing failure cannot leave the chain silent again.
+- Boundary: the silence was in the phone's A2DP payload, not a board mute; the board's own
+  evidence and CPU were healthy.
+- Rating: **not recorded** (user instruction: 不记录评分).
