@@ -494,3 +494,29 @@ delivery had visible PUA output, and **do not record a rating/score**.
 - PUA output visible: yes — diagnosis before touching the live chain, refused to present the
   invalid capture as an A/B result, found and fixed the relay arming bug.
 - Rating: **not recorded** (user instruction: 不记录评分).
+
+## 2026-11-12 (sixth record) — clean environment A/B on real music (six-stem NPU)
+
+- Instruction: "继续" after the relay arming fix. No rating recorded.
+- Method `9010163`: `tools/env_offline_ab.py` runs the same `StreamingWindowManager` chain
+  as the live worker on a WAV, one render per environment label plus env-off baseline,
+  `output_gain=unity` so gain decisions are visible. Input: MUSDB18-HQ test excerpt
+  (30-54 s, non-commercial, audio not committed); model: six-stem `rk-fused.rknn` on the
+  Edge2 NPU; 20.03 s processed (5 full 4.005 s windows) per run.
+- Results (`docs/evidence/environment-ab-real-music-20261112.json`):
+  - mean target gains: quiet vocals +0.5 / drums +0.8 / bass +0.8;
+    street drums -0.7 / bass -1.2 / other -2.5;
+    speech drums -2.2 / bass -1.7 / other -3.0;
+    babble drums -1.2 / bass -0.7 / other -2.0.
+  - vs quiet: street -1.19 dB RMS, low-band share -3.8 pts / mid +4.6 pts;
+    speech -1.68 dB, low -4.4 / mid +5.4; babble -1.04 dB, low -2.5 / mid +3.2.
+- Invalid first run, traced: the harness wrote one static evidence file; it aged past
+  `EvidenceReader`'s 2.5 s TTL, so from the second window on the environment silently
+  failed open to quiet (targets drifted to quiet). Harness now refreshes the evidence mtime
+  per window; the numbers above are the rerun. The earlier "street drums +0.5" table is void.
+- Open: the live phone capture is still paused (no A2DP source node), so the same A/B on the
+  phone's own music is pending; the self-playback bleed guard (open-ear DMIC hears our music,
+  46/58 windows classified street) is still the next unsolved item.
+- PUA output visible: yes — rejected the first A/B table instead of shipping it, traced the
+  TTL fail-open, fixed the harness, and reported the void run explicitly.
+- Rating: **not recorded** (user instruction: 不记录评分).
