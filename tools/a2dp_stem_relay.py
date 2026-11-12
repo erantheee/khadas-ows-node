@@ -426,7 +426,7 @@ def main(argv: list[str] | None = None) -> int:
                         help="capture this source instead of creating the null sink")
     parser.add_argument("--pipewire-source", metavar="NODE",
                         help="capture this PipeWire output node directly with pw-record; "
-                             "direct Bluetooth links are removed after non-silence is detected")
+                             "the phone stream is still moved to the silent sink")
     parser.add_argument("--capture-latency-ms", type=int, default=100)
     parser.add_argument("--playback-latency-ms", type=int, default=1200)
     parser.add_argument("--record", metavar="PATH", help="also write the processed stream to a float32 WAV")
@@ -439,13 +439,13 @@ def main(argv: list[str] | None = None) -> int:
     signal.signal(signal.SIGTERM, _on_signal)
 
     stats: dict = {"chunks": 0, "underruns": 0, "dropped_input_chunks": 0,
-                   "dropped_output_chunks": 0, "captured_audio_seconds": 0.0,
-                   "a2dp_moves": 0}
+                   "dropped_output_chunks": 0, "captured_audio_seconds": 0.0, "a2dp_moves": 0}
     stats_lock = threading.Lock()
     capture = player = None
     module_id = None
     previous_default = None
     writer = None
+    deferred_move = False
     direct_unlinked = False
     try:
         status = ensure_npu(args.http_port)
@@ -489,6 +489,9 @@ def main(argv: list[str] | None = None) -> int:
         capture = subprocess.Popen(
             capture_command, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
         if args.pipewire_source:
+            # Keep direct playback clocking the Bluetooth source until capture
+            # has observed a genuinely non-silent window. A fixed delay races
+            # iOS stream startup and can strand bluez_input in digital silence.
             first_audio = None
             for _ in range(15):
                 candidate = read_pipe_chunk(capture, chunk_bytes)
@@ -518,10 +521,10 @@ def main(argv: list[str] | None = None) -> int:
                              daemon=True),
             threading.Thread(target=player_loop,
                              args=(args, out_q, player, writer, stats, stats_lock), daemon=True),
-            *([] if args.pipewire_source else [
+            *( [] if args.pipewire_source else [
                 threading.Thread(target=route_guard_loop,
                                  args=(args.null_sink, stats, stats_lock), daemon=True)
-            ]),
+            ] ),
             threading.Thread(target=status_loop, args=(args, stats, stats_lock), daemon=True),
         ]
         for thread in threads:
