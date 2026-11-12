@@ -577,3 +577,30 @@ delivery had visible PUA output, and **do not record a rating/score**.
   removed the direct links before `pacat` had attached; it is a handover gap, not a codec or
   board mute. Watching `underruns`/`fallbacks` remains the way to judge real dropouts.
 - Rating: **not recorded**.
+
+## 2026-11-12 (ninth record) — why the chain broke after the changes, and the self-healing fix
+
+- User question: "在最初的版本中，我们是成功过的，改着改着就没声音了，为什么？"
+  No rating recorded.
+- Answer from the evidence trail:
+  1. The original version succeeded because the chain was left alone: direct links stayed
+     until capture confirmed non-silence, the worker was never restarted, and the phone
+     session never dropped.
+  2. What actually broke it, in order: (a) my A/B killed the worker -> node fell back ->
+     iOS paused on route loss; (b) the relay then exited on its fixed 15-chunk silence
+     window and did not come back; (c) the source gate I added used `pactl`, which does not
+     list `bluez_input` on this board, so the relay waited forever while the direct link
+     was already gone; (d) when the user reconnected the phone, the node name suffix
+     changed and the running relay wedged (chunks frozen, underruns climbing, silence)
+     because it had no stall detection and no re-arm; (e) my own mistake: a stale
+     `start_demo.sh` (T88 hash) was deployed over the board copy (restored same day).
+  3. Fix `121ba51`: suffix-tolerant source resolution via `pw-cli`, per-session teardown
+     that restores direct links, `--stall-timeout` watchdog, and a re-arm loop in main()
+     so the relay rebuilds the pipeline whenever the phone source returns.
+- Live verification after the fix: phone -> relay -> node -> worker (npu, env on) -> Anker;
+  `chunks` growing, `underruns=0`, `fallbacks=0`, RTF ~0.67, sink monitor RMS ~-30 dBFS.
+  A 28 s watch found one input-side fade to -93 dBFS (track change on the phone), not a
+  processing gap.
+- PUA output visible: yes — per-cause accounting instead of a blanket "修好了", admitted the
+  self-inflicted regressions, and rebuilt the failure paths with a stall watchdog + re-arm.
+- Rating: **not recorded** (user instruction: 不记录评分).
