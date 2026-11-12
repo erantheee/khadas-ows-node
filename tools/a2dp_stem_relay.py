@@ -173,13 +173,15 @@ def move_existing_inputs(sink: str) -> int:
     return moved
 
 
-def wait_for_pipewire_source(name: str, timeout_s: float) -> None:
-    """Wait until the phone's A2DP source node exists before opening capture.
+def resolve_pipewire_source(name: str, timeout_s: float) -> str:
+    """Wait for the phone's A2DP source node and return its actual node name.
 
-    `pw-record --target NAME` silently falls back to the default source when NAME is
-    missing, so a relay started before the phone streams used to grab the DMIC array and
-    hold hw:2,0 busy (dmic_evidence then failed to open it). Gate on the node instead.
+    The numeric suffix of ``bluez_input.<MAC>.<n>`` is assigned by BlueZ/PipeWire and can
+    change after the phone reconnects, so the resolver also accepts the MAC prefix (any
+    suffix). `pw-record --target NAME` silently falls back to the default source when the
+    exact name is missing, so the relay must never capture until this resolves.
     """
+    prefix = name.rsplit(".", 1)[0] + "." if name.count(".") >= 2 else name
     deadline = None if timeout_s <= 0 else time.monotonic() + timeout_s
     while not _stop.is_set() and (deadline is None or time.monotonic() < deadline):
         try:
@@ -190,8 +192,12 @@ def wait_for_pipewire_source(name: str, timeout_s: float) -> None:
                 capture_output=True, text=True, timeout=3.0).stdout
         except (OSError, subprocess.SubprocessError):
             listing = ""
-        if f'node.name = "{name}"' in listing:
-            return
+        for line in listing.splitlines():
+            line = line.strip()
+            if line.startswith('node.name = "'):
+                node_name = line[len('node.name = "'):-1]
+                if node_name == name or node_name.startswith(prefix):
+                    return node_name
         time.sleep(1.0)
     raise RuntimeError(f"PipeWire source {name!r} did not appear "
                        f"within {timeout_s:g}s (--start-timeout 0 waits)")
@@ -210,7 +216,8 @@ def direct_links(source: str, sink: str, *, connect: bool) -> None:
             raise RuntimeError(f"{' '.join(command)}: {result.stderr.strip()}")
 
 
-def route_guard_loop(target_sink: str, stats: dict, stats_lock: threading.Lock) -> None:
+def route_guard_loop(target_sink: str, stats: dict, stats_lock: threading.Lock,
+                     stop: threading.Event) -> None:
     """Keep every received A2DP stream on the silent capture sink.
 
     WirePlumber's stream-restore remembers the sink of the previous "oowow (codec SBC)"
@@ -218,7 +225,7 @@ def route_guard_loop(target_sink: str, stats: dict, stats_lock: threading.Lock) 
     even though the default sink is the silent one. Moving it is cheap and idempotent.
     """
     target_index = None
-    while not _stop.is_set():
+    while not stop.is_set():
         try:
             sinks = pctl("list", "short", "sinks").splitlines()
             for line in sinks:
@@ -246,13 +253,13 @@ def route_guard_loop(target_sink: str, stats: dict, stats_lock: threading.Lock) 
                 stats["a2dp_stream_seen"] = True
                 stats["a2dp_moves"] = stats.get("a2dp_moves", 0) + 1
             print(f"[relay] A2DP stream #{entry['index']} moved to {target_sink}", flush=True)
-        _stop.wait(1.0)
+        stop.wait(1.0)
 
 
 def reader_loop(proc: subprocess.Popen, out: queue.Queue, chunk_bytes: int,
-                stats: dict, stats_lock: threading.Lock) -> None:
+                stats: dict, stats_lock: threading.Lock, stop: threading.Event) -> None:
     buffer = bytearray()
-    while not _stop.is_set():
+    while not stop.is_set():
         data = proc.stdout.read(chunk_bytes - len(buffer))
         if not data:
             break
@@ -264,7 +271,7 @@ def reader_loop(proc: subprocess.Popen, out: queue.Queue, chunk_bytes: int,
                 with stats_lock:
                     stats["dropped_input_chunks"] += 1
             buffer.clear()
-    _stop.set()
+    stop.set()
 
 
 def read_pipe_chunk(proc: subprocess.Popen, size: int) -> bytes | None:
@@ -279,7 +286,8 @@ def read_pipe_chunk(proc: subprocess.Popen, size: int) -> bytes | None:
 
 
 def processor_loop(args: argparse.Namespace, in_q: queue.Queue, out_q: queue.Queue,
-                   stats: dict, stats_lock: threading.Lock) -> None:
+                   stats: dict, stats_lock: threading.Lock,
+                   stop: threading.Event) -> None:
     chunk_frames = int(round(SAMPLE_RATE * args.window_ms / 1000.0))
     chunk_bytes = chunk_frames * BYTES_PER_FRAME
     sock = None
@@ -288,7 +296,7 @@ def processor_loop(args: argparse.Namespace, in_q: queue.Queue, out_q: queue.Que
     try:
         sock = socket.create_connection((args.node_host, args.node_port), timeout=5.0)
         sock.settimeout(args.node_timeout)
-        while not _stop.is_set():
+        while not stop.is_set():
             try:
                 payload = in_q.get(timeout=1.0)
             except queue.Empty:
@@ -332,7 +340,7 @@ def processor_loop(args: argparse.Namespace, in_q: queue.Queue, out_q: queue.Que
     except Exception as exc:  # noqa: BLE001 - surfaced in stats and exit code
         with stats_lock:
             stats["processor_error"] = f"{type(exc).__name__}: {exc}"
-        _stop.set()
+        stop.set()
     finally:
         if sock is not None:
             sock.close()
@@ -353,7 +361,7 @@ def _recv_exact(sock: socket.socket, size: int) -> bytes | None:
 
 def player_loop(args: argparse.Namespace, out_q: queue.Queue, pacat: subprocess.Popen,
                 writer: "Float32WavWriter | None", stats: dict,
-                stats_lock: threading.Lock) -> None:
+                stats_lock: threading.Lock, stop: threading.Event) -> None:
     chunk_frames = int(round(SAMPLE_RATE * args.window_ms / 1000.0))
     chunk_bytes = chunk_frames * BYTES_PER_FRAME
     subs = max(1, int(args.window_ms // 50))          # 50 ms sub-writes keep the server buffer small
@@ -362,7 +370,7 @@ def player_loop(args: argparse.Namespace, out_q: queue.Queue, pacat: subprocess.
     silence = b"\x00" * chunk_bytes
     # pre-roll: wait until enough processed audio is queued to absorb the NPU RTT jitter
     deadline = time.monotonic() + args.preroll_timeout
-    while (not _stop.is_set() and out_q.qsize() < args.preroll
+    while (not stop.is_set() and out_q.qsize() < args.preroll
            and time.monotonic() < deadline):
         time.sleep(0.05)
     with stats_lock:
@@ -370,7 +378,7 @@ def player_loop(args: argparse.Namespace, out_q: queue.Queue, pacat: subprocess.
     next_tick = time.monotonic()
     underruns = 0
     chunk_index = 0
-    while not _stop.is_set():
+    while not stop.is_set():
         try:
             processed = out_q.get(timeout=min(0.5, sub_duration))
         except queue.Empty:
@@ -389,7 +397,7 @@ def player_loop(args: argparse.Namespace, out_q: queue.Queue, pacat: subprocess.
                 pacat.stdin.write(part)
                 pacat.stdin.flush()
             except (BrokenPipeError, ValueError):
-                _stop.set()
+                stop.set()
                 return
             next_tick += sub_duration
             delay = next_tick - time.monotonic()
@@ -402,8 +410,9 @@ def player_loop(args: argparse.Namespace, out_q: queue.Queue, pacat: subprocess.
         chunk_index += 1
 
 
-def status_loop(args: argparse.Namespace, stats: dict, stats_lock: threading.Lock) -> None:
-    while not _stop.is_set():
+def status_loop(args: argparse.Namespace, stats: dict, stats_lock: threading.Lock,
+                stop: threading.Event) -> None:
+    while not stop.is_set():
         try:
             status = node_status(args.http_port)
             with stats_lock:
@@ -422,7 +431,7 @@ def status_loop(args: argparse.Namespace, stats: dict, stats_lock: threading.Loc
                   f"a2dp_moves={stats.get('a2dp_moves', 0)}", flush=True)
         except Exception:  # noqa: BLE001 - status is best-effort telemetry
             pass
-        _stop.wait(args.status_interval)
+        stop.wait(args.status_interval)
 
 
 def write_stats(path: str, stats: dict) -> None:
@@ -445,6 +454,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--start-timeout", type=float, default=15.0,
                         help="seconds to wait for non-silent source audio before moving "
                              "the links; 0 = wait until the phone starts playing")
+    parser.add_argument("--stall-timeout", type=float, default=20.0,
+                        help="tear down and re-arm when no chunk has progressed for this "
+                             "long (node restart / dead socket)")
     parser.add_argument("--node-timeout", type=float, default=10.0)
     parser.add_argument("--sink", help="playback sink name (default: first USB sink)")
     parser.add_argument("--null-sink", default="a2dp_stem_in",
@@ -468,12 +480,44 @@ def main(argv: list[str] | None = None) -> int:
     stats: dict = {"chunks": 0, "underruns": 0, "dropped_input_chunks": 0,
                    "dropped_output_chunks": 0, "captured_audio_seconds": 0.0, "a2dp_moves": 0}
     stats_lock = threading.Lock()
+
+    attempt = 0
+    while not _stop.is_set():
+        attempt += 1
+        session_stop = threading.Event()
+        _run_session(args, stats, stats_lock, session_stop)
+        if _stop.is_set():
+            break
+        print(f"[relay] session {attempt} ended; re-arming after the phone source returns",
+              flush=True)
+        time.sleep(2.0)
+
+    with stats_lock:
+        stats["finished_at"] = time.strftime("%Y-%m-%dT%H:%M:%S%z")
+        stats["node_final"] = stats.get("node")
+        stats["ok"] = (
+            stats.get("chunks", 0) > 0
+            and stats.get("underruns", 0) == 0
+            and not stats.get("processor_error")
+            and (stats.get("node") or {}).get("actual_mode") == "npu"
+        )
+    if args.stats_json:
+        write_stats(args.stats_json, stats)
+    print(f"[relay] stopped: chunks={stats.get('chunks')} underruns={stats.get('underruns')} "
+          f"node={stats.get('node_final')} ok={stats.get('ok')}", flush=True)
+    return 0 if not stats.get("processor_error") else 1
+
+
+def _run_session(args: argparse.Namespace, stats: dict, stats_lock: threading.Lock,
+                 stop: threading.Event) -> None:
+    """One capture->node->playback session with teardown. Callers re-arm after it ends."""
     capture = player = None
     module_id = None
     previous_default = None
     writer = None
-    deferred_move = False
     direct_unlinked = False
+    source = ""
+    sink = ""
     try:
         status = ensure_npu(args.http_port)
         print(f"[relay] node requested={status.get('requested_mode')} "
@@ -483,7 +527,8 @@ def main(argv: list[str] | None = None) -> int:
             source = args.external_source
             sink = pick_sink(args.sink)
         elif args.pipewire_source:
-            source = args.pipewire_source
+            source = resolve_pipewire_source(args.pipewire_source, args.start_timeout)
+            args.pipewire_source = source  # teardown restores links on the real node name
             sink = pick_sink(args.sink)
         else:
             if args.null_sink in [name for _i, name, _f in list_sinks()]:
@@ -513,8 +558,6 @@ def main(argv: list[str] | None = None) -> int:
                 "parec", f"--device={source}", "--format=float32le", f"--rate={SAMPLE_RATE}",
                 f"--channels={CHANNELS}", f"--latency-msec={args.capture_latency_ms}",
             ]
-        if args.pipewire_source:
-            wait_for_pipewire_source(args.pipewire_source, args.start_timeout)
         capture = subprocess.Popen(
             capture_command, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
         if args.pipewire_source:
@@ -523,7 +566,8 @@ def main(argv: list[str] | None = None) -> int:
             # iOS stream startup and can strand bluez_input in digital silence.
             first_audio = None
             deadline = None if args.start_timeout <= 0 else time.monotonic() + args.start_timeout
-            while not _stop.is_set() and (deadline is None or time.monotonic() < deadline):
+            while (not stop.is_set() and not _stop.is_set()
+                   and (deadline is None or time.monotonic() < deadline)):
                 candidate = read_pipe_chunk(capture, chunk_bytes)
                 if candidate is None:
                     break
@@ -548,33 +592,50 @@ def main(argv: list[str] | None = None) -> int:
 
         threads = [
             threading.Thread(target=reader_loop,
-                             args=(capture, in_q, chunk_bytes, stats, stats_lock), daemon=True),
-            threading.Thread(target=processor_loop, args=(args, in_q, out_q, stats, stats_lock),
+                             args=(capture, in_q, chunk_bytes, stats, stats_lock, stop),
                              daemon=True),
+            threading.Thread(target=processor_loop,
+                             args=(args, in_q, out_q, stats, stats_lock, stop), daemon=True),
             threading.Thread(target=player_loop,
-                             args=(args, out_q, player, writer, stats, stats_lock), daemon=True),
+                             args=(args, out_q, player, writer, stats, stats_lock, stop),
+                             daemon=True),
             *( [] if args.pipewire_source else [
                 threading.Thread(target=route_guard_loop,
-                                 args=(args.null_sink, stats, stats_lock), daemon=True)
+                                 args=(args.null_sink, stats, stats_lock, stop), daemon=True)
             ] ),
-            threading.Thread(target=status_loop, args=(args, stats, stats_lock), daemon=True),
+            threading.Thread(target=status_loop,
+                             args=(args, stats, stats_lock, stop), daemon=True),
         ]
         for thread in threads:
             thread.start()
 
         started = time.monotonic()
-        while not _stop.is_set():
+        last_chunks = 0
+        stall_deadline: float | None = None
+        while not stop.is_set() and not _stop.is_set():
             if args.duration and time.monotonic() - started >= args.duration:
                 break
             if not any(thread.is_alive() for thread in threads[1:3]):
                 break
+            with stats_lock:
+                now_chunks = int(stats.get("chunks", 0))
+            if now_chunks != last_chunks:
+                last_chunks = now_chunks
+                stall_deadline = None
+            elif now_chunks > 0:
+                if stall_deadline is None:
+                    stall_deadline = time.monotonic() + args.stall_timeout
+                elif time.monotonic() >= stall_deadline:
+                    print(f"[relay] stalled {args.stall_timeout:g}s at chunk {now_chunks}; "
+                          f"tearing down to re-arm", flush=True)
+                    break
             time.sleep(0.2)
     except Exception as exc:  # noqa: BLE001
-        print(f"[relay] error: {exc}", file=sys.stderr)
-        stats["error"] = str(exc)
-        return 2
+        print(f"[relay] session error: {exc}", file=sys.stderr)
+        with stats_lock:
+            stats["error"] = str(exc)
     finally:
-        _stop.set()
+        stop.set()
         for proc in (capture, player):
             if proc is not None:
                 try:
@@ -587,7 +648,7 @@ def main(argv: list[str] | None = None) -> int:
                         pass
         if direct_unlinked:
             try:
-                direct_links(args.pipewire_source, sink, connect=True)
+                direct_links(source, sink, connect=True)
             except Exception:  # noqa: BLE001
                 pass
         if module_id is not None:
@@ -600,20 +661,6 @@ def main(argv: list[str] | None = None) -> int:
         if writer is not None:
             writer.close()
 
-    with stats_lock:
-        stats["finished_at"] = time.strftime("%Y-%m-%dT%H:%M:%S%z")
-        stats["node_final"] = stats.get("node")
-        stats["ok"] = (
-            stats.get("chunks", 0) > 0
-            and stats.get("underruns", 0) == 0
-            and not stats.get("processor_error")
-            and (stats.get("node") or {}).get("actual_mode") == "npu"
-        )
-    if args.stats_json:
-        write_stats(args.stats_json, stats)
-    print(f"[relay] stopped: chunks={stats.get('chunks')} underruns={stats.get('underruns')} "
-          f"node={stats.get('node_final')} ok={stats.get('ok')}", flush=True)
-    return 0 if not stats.get("processor_error") else 1
 
 
 if __name__ == "__main__":
