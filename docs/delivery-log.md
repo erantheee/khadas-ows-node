@@ -565,3 +565,15 @@ delivery had visible PUA output, and **do not record a rating/score**.
 - Boundary: the silence was in the phone's A2DP payload, not a board mute; the board's own
   evidence and CPU were healthy.
 - Rating: **not recorded** (user instruction: 不记录评分).
+
+### 2026-11-12 (eighth record, follow-up) — chain restored with processing live
+
+- After the phone A2DP reconnect, direct audio returned; starting the relay then removed the
+  direct links and its `pacat` attached to the sink, so the chain now plays processed audio:
+  relay `chunks=55`, `underruns=0`, `node_rtf` 0.66-0.67, `actual_mode=npu`, sink monitor
+  RMS ≈ -30 dBFS with normal music dynamics (no -240 dBFS gaps), env layer reporting
+  `env=street` on the live content, board load 0.82.
+- The "one sound then silence" the user reported matched the ~1-2 s window where the relay
+  removed the direct links before `pacat` had attached; it is a handover gap, not a codec or
+  board mute. Watching `underruns`/`fallbacks` remains the way to judge real dropouts.
+- Rating: **not recorded**.
