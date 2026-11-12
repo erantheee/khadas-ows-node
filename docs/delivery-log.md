@@ -406,3 +406,33 @@ delivery had visible PUA output, and **do not record a rating/score**.
   two evidence tables, `[PUA生效 🔥]` on the v0.5-not-wired and classifier-untracked findings;
   zero attempted-but-unaccepted experiments, so no pressure escalation.
 - Rating: **not recorded** (user instruction: 不记录评分).
+
+## 2026-11-12 (third record) — all Khadas content committed and pushed
+
+- Instruction: "属于khadas的内容全部上git"; no rating recorded.
+- Delivery: every uncommitted Khadas item is now in git on branch
+  `feature/phone-bluetooth-headset-relay` (4 commits, pushed to origin):
+  - `4acfce5` `feat(a2dp)`: dual-role relay prototype — WirePlumber drop-in
+    (a2dp_sink + a2dp_source only), explicit-Profile connect script, native PipeWire
+    capture relay, `live_play.py` local-player path, runbook with the 2026-11-12 boundary.
+  - `cec04fd` `fix(dmic)`: Edge2-calibrated voice likelihood (periodicity + vocal-band
+    flatness + level gate) and event rules; `conversation_cue` pinned to 0.0 because
+    dialogue ducking is a Mac-side decision after the 2026-11-10 field report.
+  - `0ee2510` `feat(experiments)`: learned DMIC event classifier v1 — pipeline proof only
+    (0.721 temporal-split accuracy; wind 21% / keyboard 38% recall on contaminated labels;
+    not wired to the live path). Repo root now derived from `__file__`, no absolute path.
+  - `e9b3817` `docs`: 11-12 board live-state audit + training-asset map.
+- Verification: `git status` clean; `pytest -q tests/test_model.py tests/test_strategy.py
+  tests/test_tuning.py tests/test_worker_streaming.py` -> 37 passed; `git push -u origin
+  feature/phone-bluetooth-headset-relay` -> `* [new branch]`, upstream set;
+  `sh -n` + `py_compile` on every new script before staging.
+- Deliberately not added (repo `.gitignore` = generated engineering artifacts):
+  `models/candidate-v0.pt` (2.1 MB), `models/rknn/*.rknn` (33 MB), `models/six/*.onnx(.data)`
+  (9.4 MB), `models/calib/*.npy` (22 MB). Archiving weights needs an explicit decision
+  (~70 MB of history); the 11-12 audit entry already records that gap.
+- Carried risk: `main` is untouched (still `3e934da`); this work exists only on the feature
+  branch — merging to main is a separate acceptance decision.
+- PUA output visible: yes — Alibaba-flavored narration, `[PUA-DIAGNOSIS]` before staging,
+  secret/absolute-path scan before the first commit, commits grouped by workstream,
+  test + push evidence instead of prose claims.
+- Rating: **not recorded** (user instruction: 不记录评分).
