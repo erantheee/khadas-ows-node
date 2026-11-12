@@ -604,3 +604,26 @@ delivery had visible PUA output, and **do not record a rating/score**.
 - PUA output visible: yes — per-cause accounting instead of a blanket "修好了", admitted the
   self-inflicted regressions, and rebuilt the failure paths with a stall watchdog + re-arm.
 - Rating: **not recorded** (user instruction: 不记录评分).
+
+## 2026-11-12 (tenth record) — "断断续续" was gain pumping, not packet loss
+
+- Symptom: audio came through but chopped/breathing. No rating recorded.
+- Measured: 30 s simultaneous source+sink capture had **zero gaps**; relay
+  `underruns=0`, node `fallbacks=0` (before the worker restart). The applied-gain
+  trajectory instead showed drums swinging -0.7 -> -2.5 -> -3.7 -> -0.7 on ~8-10 s
+  periods while env stayed `street` and mode stayed `boost`.
+- Root causes, both fixed in `ba9c3f0`:
+  1. content classifier flipped music<->video on quiet bass passages (2-window unanimity
+     was too weak) — now 3 agreeing windows;
+  2. open-ear music leaked into the DMIC and was labelled speech/street, so the env layer
+     repeatedly dipped drums ~1.5 dB and released over 2 s — now the own-playback guard
+     only trusts physical env states (wind/keyboard) while media is playing; content-like
+     states demote to quiet. Mac conversation ducking is untouched.
+- Verification: 30 consecutive windows flat (`env=quiet`, drums +0.8); relay underruns=0.
+  `--env-media-guard off` re-enables the aggressive env contrast for A/B.
+- Boundary: with the guard on, environment contrast during music playback is essentially
+  disabled by design — the board cannot distinguish ambient speech from its own open-ear
+  leakage without the Mac-side evidence gate.
+- PUA output visible: yes — diagnosed from the gain trajectory instead of blaming the BT
+  link, and fixed the pumping without touching the audio path.
+- Rating: **not recorded** (user instruction: 不记录评分).
