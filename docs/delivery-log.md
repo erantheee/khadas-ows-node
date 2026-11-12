@@ -520,3 +520,30 @@ delivery had visible PUA output, and **do not record a rating/score**.
 - PUA output visible: yes — rejected the first A/B table instead of shipping it, traced the
   TTL fail-open, fixed the harness, and reported the void run explicitly.
 - Rating: **not recorded** (user instruction: 不记录评分).
+
+## 2026-11-12 (seventh record) — dropout root cause: BLAS spin + relay source hijack
+
+- Instruction: "音乐有点断断续续的，感觉是听到了噪音后" + "优化建议是什么，可以调节包络了吗".
+  No rating recorded.
+- Measured causes (not guesses):
+  - `dmic_evidence.py` was running 5 BLAS spin-wait threads at 100% each — 399% CPU,
+    board load average 5.0 on 8 cores. That starves the relay/PipeWire Python threads,
+    which is exactly what shows up as choppy output.
+  - the armed relay's `pw-record --target <phone source>` silently fell back to the
+    default source when the phone node did not exist, held `hw:2,0` busy, and
+    `dmic_evidence` then exited (`posted=0`) — the evidence stream died at 10:39, which
+    in turn let the stack fall back through the watchdog.
+  - steady-state relay underruns were 0; the `underruns=7` spike happened during my worker
+    restarts for the A/B, i.e. measurement-induced, not the algorithm.
+- Fixes `a88b839`: `OPENBLAS_NUM_THREADS=1` + `OMP_NUM_THREADS=1` (dmic 399% -> ~10%,
+  load 5.0 -> 0.73), relay now waits for the exact PipeWire source node before capturing
+  (`--start-timeout 0`), `tools/start_demo.sh` restored to the rk-fused model hash (a stale
+  copy had been deployed) and exports the BLAS limits for watchdog restarts.
+- Envelope adjustability (answer to the question): the environment layer is live and its
+  knobs are `--env-decision on|off`, the seven-state `ENV_MODIFIERS` table, `--attack-ms`,
+  `--release-ms`, `--listening-mode`, and the content profiles. Changing a gain value is a
+  code edit + worker restart today — a JSON config / hot reload is the next step, not done.
+- Dropout vs gain pumping: environment decisions only change gain (no sample gaps); real
+  dropouts are underruns/fallbacks. With the CPU fix and source gating, the next live
+  session should be judged on relay underrun counts, not on feel.
+- Rating: **not recorded** (user instruction: 不记录评分).
