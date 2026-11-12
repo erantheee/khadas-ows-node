@@ -216,6 +216,26 @@ def direct_links(source: str, sink: str, *, connect: bool) -> None:
             raise RuntimeError(f"{' '.join(command)}: {result.stderr.strip()}")
 
 
+def source_watch_loop(source_name: str, stop: threading.Event) -> None:
+    """End the session the moment the expected capture node disappears.
+
+    `pw-record --target NAME` silently falls back to the DEFAULT source when NAME is
+    dropped mid-session, so a relay that lost the phone used to keep "processing" the
+    DMIC array. Poll the graph and tear down so the re-arm loop re-gates on the phone.
+    """
+    while not stop.is_set():
+        try:
+            listing = subprocess.run(["pw-cli", "ls", "Node"], capture_output=True,
+                                     text=True, timeout=3.0).stdout
+        except (OSError, subprocess.SubprocessError):
+            listing = ""
+        if f'node.name = "{source_name}"' not in listing:
+            print("[relay] source node lost; ending session to re-arm", flush=True)
+            stop.set()
+            return
+        stop.wait(2.0)
+
+
 def route_guard_loop(target_sink: str, stats: dict, stats_lock: threading.Lock,
                      stop: threading.Event) -> None:
     """Keep every received A2DP stream on the silent capture sink.
@@ -603,6 +623,8 @@ def _run_session(args: argparse.Namespace, stats: dict, stats_lock: threading.Lo
                 threading.Thread(target=route_guard_loop,
                                  args=(args.null_sink, stats, stats_lock, stop), daemon=True)
             ] ),
+            *( [threading.Thread(target=source_watch_loop, args=(source, stop), daemon=True)]
+               if args.pipewire_source else [] ),
             threading.Thread(target=status_loop,
                              args=(args, stats, stats_lock, stop), daemon=True),
         ]
