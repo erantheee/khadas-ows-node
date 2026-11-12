@@ -1,0 +1,196 @@
+{
+  "date": "2026-11-12",
+  "scope": "offline environment-decision A/B on real music, six-stem rk-fused on the Edge2 NPU",
+  "clip": {
+    "source": "MUSDB18-HQ test track 'Angels In Amplifiers - I'm Alright', 30-54 s, 24 s stereo 44.1 kHz",
+    "license": "MUSDB18-HQ is non-commercial (Zenodo 3338373); internal evaluation only, audio not committed",
+    "processed_seconds": 20.03
+  },
+  "backend": "rknnlite",
+  "model": "artifacts/rk-fused.rknn",
+  "note": "Same StreamingWindowManager as the live worker; output_gain=unity so gain decisions are visible. A/B is not a listening-quality claim and not a board latency claim.",
+  "deltas_vs_quiet": {
+    "baseline": {
+      "rms_db": 0.0,
+      "low_share_pts": 0.0,
+      "mid_share_pts": 0.0
+    },
+    "quiet": {
+      "rms_db": 0.0,
+      "low_share_pts": 0.0,
+      "mid_share_pts": 0.0
+    },
+    "street": {
+      "rms_db": -1.19,
+      "low_share_pts": -3.8,
+      "mid_share_pts": 4.6
+    },
+    "speech": {
+      "rms_db": -1.68,
+      "low_share_pts": -4.4,
+      "mid_share_pts": 5.4
+    },
+    "babble": {
+      "rms_db": -1.04,
+      "low_share_pts": -2.5,
+      "mid_share_pts": 3.2
+    }
+  },
+  "runs": [
+    {
+      "label": "baseline",
+      "env": "quiet",
+      "env_windows": {
+        "quiet": 5
+      },
+      "mode": "boost",
+      "windows": 5,
+      "rms_dbfs": -19.01,
+      "bands": {
+        "low": 37.7,
+        "mid": 47.7,
+        "high": 3.0
+      },
+      "target_db_mean": {
+        "vocals": 0.5,
+        "drums": 0.8,
+        "bass": 0.8,
+        "guitar": 0.0,
+        "piano": 0.0,
+        "other": 0.0
+      },
+      "applied_db_mean": {
+        "vocals": 0.5,
+        "drums": 0.8,
+        "bass": 0.8,
+        "guitar": 0.0,
+        "piano": 0.0,
+        "other": 0.0
+      }
+    },
+    {
+      "label": "quiet",
+      "env": "quiet",
+      "env_windows": {
+        "quiet": 5
+      },
+      "mode": "boost",
+      "windows": 5,
+      "rms_dbfs": -19.01,
+      "bands": {
+        "low": 37.7,
+        "mid": 47.7,
+        "high": 3.0
+      },
+      "target_db_mean": {
+        "vocals": 0.5,
+        "drums": 0.8,
+        "bass": 0.8,
+        "guitar": 0.0,
+        "piano": 0.0,
+        "other": 0.0
+      },
+      "applied_db_mean": {
+        "vocals": 0.5,
+        "drums": 0.8,
+        "bass": 0.8,
+        "guitar": 0.0,
+        "piano": 0.0,
+        "other": 0.0
+      }
+    },
+    {
+      "label": "street",
+      "env": "street",
+      "env_windows": {
+        "street": 5
+      },
+      "mode": "boost",
+      "windows": 5,
+      "rms_dbfs": -20.2,
+      "bands": {
+        "low": 33.9,
+        "mid": 52.3,
+        "high": 3.2
+      },
+      "target_db_mean": {
+        "vocals": 0.5,
+        "drums": -0.7,
+        "bass": -1.2,
+        "guitar": -1.0,
+        "piano": -1.5,
+        "other": -2.5
+      },
+      "applied_db_mean": {
+        "vocals": 0.5,
+        "drums": -0.7,
+        "bass": -1.2,
+        "guitar": -1.0,
+        "piano": -1.5,
+        "other": -2.5
+      }
+    },
+    {
+      "label": "speech",
+      "env": "speech",
+      "env_windows": {
+        "speech": 5
+      },
+      "mode": "boost",
+      "windows": 5,
+      "rms_dbfs": -20.69,
+      "bands": {
+        "low": 33.3,
+        "mid": 53.1,
+        "high": 3.2
+      },
+      "target_db_mean": {
+        "vocals": 0.5,
+        "drums": -2.2,
+        "bass": -1.7,
+        "guitar": -2.0,
+        "piano": -2.5,
+        "other": -3.0
+      },
+      "applied_db_mean": {
+        "vocals": 0.5,
+        "drums": -2.2,
+        "bass": -1.7,
+        "guitar": -2.0,
+        "piano": -2.5,
+        "other": -3.0
+      }
+    },
+    {
+      "label": "babble",
+      "env": "babble",
+      "env_windows": {
+        "babble": 5
+      },
+      "mode": "boost",
+      "windows": 5,
+      "rms_dbfs": -20.05,
+      "bands": {
+        "low": 35.2,
+        "mid": 50.9,
+        "high": 3.1
+      },
+      "target_db_mean": {
+        "vocals": 0.5,
+        "drums": -1.2,
+        "bass": -0.7,
+        "guitar": -1.2,
+        "piano": -1.5,
+        "other": -2.0
+      },
+      "applied_db_mean": {
+        "vocals": 0.5,
+        "drums": -1.2,
+        "bass": -0.7,
+        "guitar": -1.2,
+        "piano": -1.5,
+        "other": -2.0
+      }
+    }
+  ]
+}
