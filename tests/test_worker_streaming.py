@@ -2,9 +2,11 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import numpy as np
@@ -201,3 +203,73 @@ def test_envelope_roles_policy_runs_six_stem_decision_on_four_stem_model():
     assert entry["mode"] == "boost"
     assert set(entry["target_gain_db"]) == {"vocals", "drums", "bass", "other"}
     assert entry["content_type"] in {"music", "podcast", "video"}
+
+
+def _write_evidence(path, payload, age_s: float = 0.0):
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    if age_s:
+        stamp = time.time() - age_s
+        os.utime(path, (stamp, stamp))
+
+
+def test_environment_decision_shapes_envelope_targets(tmp_path):
+    evidence = tmp_path / "evidence.json"
+    _write_evidence(evidence, {"context": "street", "environment": "NOISY",
+                               "event": "quiet", "band_dbfs": [0.0] * 24})
+    packet = sine_packet(1.0)
+    reference = W.StreamingWindowManager(
+        W.StubBackend(), output_mode="envelope", policy="roles",
+        evidence_file=str(evidence), env_decision="off")
+    reference.process(packet, CHANNELS)
+    shaped = W.StreamingWindowManager(
+        W.StubBackend(), output_mode="envelope", policy="roles",
+        evidence_file=str(evidence), env_decision="on")
+    shaped.process(packet, CHANNELS)
+    off_entry = reference.role_history[-1]
+    on_entry = shaped.role_history[-1]
+    assert off_entry["environment"] == "quiet"
+    assert on_entry["environment"] == "street"
+    assert on_entry["target_gain_db"]["drums"] < off_entry["target_gain_db"]["drums"]
+    assert on_entry["target_gain_db"]["bass"] < off_entry["target_gain_db"]["bass"]
+    assert on_entry["target_gain_db"]["vocals"] == off_entry["target_gain_db"]["vocals"]
+
+
+def test_environment_fails_open_when_evidence_is_stale(tmp_path):
+    evidence = tmp_path / "evidence.json"
+    _write_evidence(evidence, {"context": "near_voice", "band_dbfs": [0.0] * 24}, age_s=60)
+    manager = W.StreamingWindowManager(
+        W.StubBackend(), output_mode="envelope", policy="roles",
+        evidence_file=str(evidence))
+    manager.process(sine_packet(1.0), CHANNELS)
+    entry = manager.role_history[-1]
+    assert entry["environment"] == "quiet"
+    assert entry["mode"] == "boost"
+
+
+def test_board_speech_evidence_masks_instead_of_ducking(tmp_path):
+    """2026-11-10 decision: board speech feeds contrast, the Mac owns ducking."""
+    evidence = tmp_path / "evidence.json"
+    _write_evidence(evidence, {"context": "near_voice", "environment": "VOICE",
+                               "event": "speech", "speech_active": True,
+                               "band_dbfs": [0.0] * 24})
+    manager = W.StreamingWindowManager(
+        W.StubBackend(), output_mode="envelope", policy="roles",
+        evidence_file=str(evidence))
+    manager.process(sine_packet(1.0), CHANNELS)
+    entry = manager.role_history[-1]
+    assert entry["environment"] == "speech"
+    assert entry["mode"] == "boost"                       # no duck without the Mac cue
+    assert entry["target_gain_db"]["drums"] < 0.0         # contrast applied instead
+
+
+def test_mac_conversation_cue_still_ducks(tmp_path):
+    evidence = tmp_path / "evidence.json"
+    _write_evidence(evidence, {"context": "quiet", "conversation_cue": 1.0,
+                               "band_dbfs": [0.0] * 24})
+    manager = W.StreamingWindowManager(
+        W.StubBackend(), output_mode="envelope", policy="roles",
+        evidence_file=str(evidence))
+    manager.process(sine_packet(1.0), CHANNELS)
+    entry = manager.role_history[-1]
+    assert entry["mode"] == "duck"
+    assert entry["target_gain_db"]["drums"] == -1.2

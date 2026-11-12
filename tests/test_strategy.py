@@ -3,6 +3,7 @@ import sys
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 sys.path.insert(0, str(Path(__file__).parents[1] / "python"))
 
@@ -167,3 +168,41 @@ def test_active_stem_count_uses_absolute_floor():
     stats = {"vocals": -20.0, "drums": SILENT, "bass": -70.0,
              "guitar": SILENT, "piano": SILENT, "other": -30.0}
     assert strategy.active_stem_count(stats) == 2
+
+
+def test_environment_from_evidence_priority():
+    assert strategy.environment_from_evidence(None) == "unknown"
+    assert strategy.environment_from_evidence({}) == "unknown"
+    assert strategy.environment_from_evidence({"context": "near_voice"}) == "speech"
+    assert strategy.environment_from_evidence({"environment": "VOICE"}) == "speech"
+    assert strategy.environment_from_evidence({"event": "wind", "environment": "NOISY"}) == "wind"
+    assert strategy.environment_from_evidence({"event": "keyboard"}) == "keyboard"
+    assert strategy.environment_from_evidence({"context": "babble", "environment": "LOUD"}) == "babble"
+    assert strategy.environment_from_evidence({"context": "horn"}) == "street"
+    assert strategy.environment_from_evidence({"environment": "LOUD"}) == "office"
+    assert strategy.environment_from_evidence({"context": "quiet"}) == "quiet"
+
+
+def test_environment_tracker_hysteresis_and_fail_open():
+    tracker = strategy.EnvironmentTracker(hold_windows=2, fast_windows=1)
+    assert tracker.update("quiet") == "quiet"
+    assert tracker.update("street") == "quiet"    # one window is not enough
+    assert tracker.update("street") == "street"   # second consecutive window wins
+    assert tracker.update("speech") == "speech"   # active talker enters fast
+    assert tracker.update("quiet") == "speech"    # release still needs the hold window
+    assert tracker.update("quiet") == "quiet"
+    assert tracker.update("unknown") == "quiet"   # missing evidence fails open
+    assert tracker.source == "unknown"
+
+
+def test_apply_environment_is_attenuation_only():
+    music = strategy.BOOST_PROFILE
+    quiet = strategy.apply_environment(music, "quiet")
+    assert quiet == {stem: music[stem] for stem in strategy.STEMMS6}
+    street = strategy.apply_environment(music, "street")
+    assert street["vocals"] == music["vocals"]
+    assert street["drums"] == pytest.approx(music["drums"] - 1.5)
+    assert street["bass"] == pytest.approx(music["bass"] - 2.0)
+    assert all(street[stem] <= music[stem] for stem in strategy.STEMMS6)
+    deep = strategy.apply_environment({stem: -8.0 for stem in strategy.STEMMS6}, "speech")
+    assert min(deep.values()) == strategy.ENV_TARGET_FLOOR_DB

@@ -322,6 +322,7 @@ class StreamingWindowManager:
         release_ms: float = 1200.0,
         gain_smooth_frames: int = 0,
         listening_mode: str = "auto",
+        env_decision: str = "on",
         boost_gains: dict[str, float] | None = None,
         duck_gains: dict[str, float] | None = None,
         output_gain: str = "peak",
@@ -351,6 +352,14 @@ class StreamingWindowManager:
         self.scenario_end_s = float(scenario_end_s)
         self.strategy_strength = float(strategy_strength)
         self.role_tracker = role_strategy.RoleTracker(role_map=role_strategy.ROLE_MAP6)
+        if env_decision not in ("on", "off"):
+            raise WorkerError(f"env_decision must be 'on' or 'off', got {env_decision!r}")
+        self.env_decision = env_decision
+        #: Environment contrast from DMIC evidence (quiet/speech/babble/street/office/wind/
+        #: keyboard). It shapes gains only; conversation ducking remains the Mac-side gate.
+        self.env_tracker = role_strategy.EnvironmentTracker()
+        self.env_state = "quiet"
+        self.env_source = "unknown"
         self.envelope = role_strategy.EnvelopeFollower(
             attack_ms=float(attack_ms), release_ms=float(release_ms),
             stems=role_strategy.STEMMS6)
@@ -361,6 +370,7 @@ class StreamingWindowManager:
         self.tuner = board_tuning.BoardTuner(
             depth=eq_depth, masking_dose=masking_dose,
             max_positive_db=max_positive_db,
+            evidence=self.evidence_reader,
             node_status=board_tuning.NodeStatusReader(node_status_url))
         self.frame_gains = np.zeros(board_tuning.BAND_COUNT, dtype=np.float64)
         #: 逐轨 STFT 帧增益（4×24），逐轨包络渲染用。
@@ -729,15 +739,23 @@ class StreamingWindowManager:
             self._content_type = detected
         return self._content_type
 
-    def _conversation_active(self) -> bool:
-        """True when the board reports an active conversation (DMIC evidence within TTL)."""
-        try:
-            evidence = self.tuner.evidence.read()
-        except Exception:  # noqa: BLE001 - evidence must never break audio
-            return False
+    def _conversation_active(self, evidence: dict | None = None) -> bool:
+        """True only when the *Mac-side* conversation gate sets `conversation_cue`.
+
+        Board-side speech evidence does **not** duck the media: the 2026-11-10 field
+        decision moved conversation ducking to the Mac (voiceprint / LLM confirmation),
+        because background speech in the environment used to flatten the envelope. On the
+        board, speech/near_voice now feeds the environment contrast layer instead
+        (`environment_from_evidence`), which protects the lead without a full duck.
+        """
+        if evidence is None:
+            try:
+                evidence = self.tuner.evidence.read()
+            except Exception:  # noqa: BLE001 - evidence must never break audio
+                return False
         if not evidence:
             return False
-        return bool(evidence.get("conversation_cue") or evidence.get("speech_active"))
+        return bool(evidence.get("conversation_cue"))
 
     def _envelope_output(self, spectrum: np.ndarray, masks: np.ndarray, pcm_frames: int) -> np.ndarray:
         """Stems -> dominant roles -> scenario gains -> envelope-shaped remix.
@@ -765,12 +783,11 @@ class StreamingWindowManager:
         roles = self.role_tracker.update(stats6)
         # 2) listening target. Priority: explicit mode > conversation duck > content profile.
         t0 = self.samples_processed / SAMPLE_RATE
-        explicit = None
         try:
-            evidence = self.tuner.evidence.read() or {}
-            explicit = evidence.get("content_type")
-        except Exception:  # noqa: BLE001
-            explicit = None
+            evidence: dict = self.tuner.evidence.read() or {}
+        except Exception:  # noqa: BLE001 - evidence must never break audio
+            evidence = {}
+        explicit = evidence.get("content_type")
         if self.listening_mode == "duck":
             engaged, content = True, self._content_type
         elif self.listening_mode == "boost":
@@ -778,11 +795,20 @@ class StreamingWindowManager:
         else:
             content = (explicit if explicit in self.content_profiles
                        else self._detect_content(spectrum))
-            engaged = self._conversation_active()
+            engaged = self._conversation_active(evidence)
+        # 2a) environment decision (quiet/speech/babble/street/office/wind/keyboard) from
+        # the board DMIC evidence, with hysteresis and fail-open to quiet. It shapes
+        # contrast only: duck already attenuates, so the environment layer never stacks on
+        # top of it (that would double-count and flatten the mix).
+        env_source = (role_strategy.environment_from_evidence(evidence)
+                      if self.env_decision == "on" else "unknown")
+        self.env_state = self.env_tracker.update(env_source)
+        self.env_source = self.env_tracker.source
         if engaged:
-            profile = self.duck_profile
+            profile = dict(self.duck_profile)
         else:
-            profile = self.content_profiles.get(content, self.boost_profile)
+            profile = role_strategy.apply_environment(
+                self.content_profiles.get(content, self.boost_profile), self.env_state)
         target = {stem: float(profile.get(stem, 0.0)) for stem in exec_stems}
         # 2b) low-level gate: scale the target by how far the frame sits below the window peak.
         # Quiet frames fade the processing to bypass, so the time-varying spectral gain does
@@ -813,6 +839,8 @@ class StreamingWindowManager:
             "t_s": round(t0, 3),
             "mode": "duck" if engaged else "boost",
             "content_type": content,
+            "environment": self.env_state,
+            "env_source": self.env_source,
             "stem_count": n_stems,
             "roles": roles,
             "stem_rms_db": {stem: round(stats_db[stem], 2) for stem in exec_stems},
@@ -851,6 +879,7 @@ def serve(manager: StreamingWindowManager, mode: str, backend_name: str, model: 
         f"model={model or '-'} sha256={model_sha or '-'} "
         f"window={manager.window_frames}x{HOP} ({manager.latency_seconds:.3f}s) "
         f"gain={manager.output_gain} mode={manager.output_mode} scenario={manager.scenario} "
+        f"env={manager.env_decision} "
         "evidence=software-only",
         flush=True,
     )
@@ -893,7 +922,8 @@ def serve(manager: StreamingWindowManager, mode: str, backend_name: str, model: 
                         print(
                             f"packet seq={sequence} frames={frames} "
                             f"rtf={elapsed / (frames / SAMPLE_RATE):.3f} "
-                            f"mode={last.get('mode', 'boost')} roles={last['roles']} "
+                            f"mode={last.get('mode', 'boost')} "
+                            f"env={last.get('environment', '-')} roles={last['roles']} "
                             f"target_db={last['target_gain_db']} "
                             f"applied_db={last['applied_gain_db_last_frame']}",
                             flush=True,
@@ -931,6 +961,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--listening-mode", dest="listening_mode",
                         choices=("auto", "boost", "duck"), default="auto",
                         help="listening mode: auto (conversation -> duck), boost (always), duck (always)")
+    parser.add_argument("--env-decision", dest="env_decision", choices=("on", "off"),
+                        default="on",
+                        help="environment contrast from DMIC evidence (default on; off = content only)")
     parser.add_argument("--boost-gains", type=json.loads, default=None,
                         help="JSON gain map override for boost mode")
     parser.add_argument("--duck-gains", type=json.loads, default=None,
@@ -1011,7 +1044,8 @@ def main(argv: list[str] | None = None) -> int:
             gate_floor_db=args.gate_floor_db, gate_full_db=args.gate_full_db,
             attack_ms=args.attack_ms, release_ms=args.release_ms,
             gain_smooth_frames=args.gain_smooth_frames,
-            listening_mode=args.listening_mode, boost_gains=args.boost_gains,
+            listening_mode=args.listening_mode, env_decision=args.env_decision,
+            boost_gains=args.boost_gains,
             duck_gains=args.duck_gains,
             output_gain=output_gain, output_mode=output_mode, scenario=scenario,
             scenario_start_s=args.scenario_start_ms / 1000.0,

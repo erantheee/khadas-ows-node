@@ -1,0 +1,160 @@
+{
+  "date": "2026-11-12",
+  "scope": "decision-layer A/B, synthetic music-like packet, 4 s window",
+  "backend": "torch:candidate-v0.pt",
+  "note": "not a listening-quality or board claim",
+  "rows": [
+    {
+      "case": "quiet",
+      "env": "quiet",
+      "content": "music",
+      "mode": "boost",
+      "target_gain_db": {
+        "vocals": 0.5,
+        "drums": 0.8,
+        "bass": 0.8,
+        "other": 0.0
+      },
+      "applied_gain_db_last_frame": {
+        "vocals": 0.5,
+        "drums": 0.8,
+        "bass": 0.8,
+        "other": 0.0
+      },
+      "output_delta_db": 0.7
+    },
+    {
+      "case": "near_voice",
+      "env": "speech",
+      "content": "music",
+      "mode": "boost",
+      "target_gain_db": {
+        "vocals": 0.5,
+        "drums": -2.2,
+        "bass": -1.7,
+        "other": -3.0
+      },
+      "applied_gain_db_last_frame": {
+        "vocals": 0.5,
+        "drums": -2.2,
+        "bass": -1.7,
+        "other": -3.0
+      },
+      "output_delta_db": -1.51
+    },
+    {
+      "case": "babble",
+      "env": "babble",
+      "content": "music",
+      "mode": "boost",
+      "target_gain_db": {
+        "vocals": 0.5,
+        "drums": -1.2,
+        "bass": -0.7,
+        "other": -2.0
+      },
+      "applied_gain_db_last_frame": {
+        "vocals": 0.5,
+        "drums": -1.2,
+        "bass": -0.7,
+        "other": -2.0
+      },
+      "output_delta_db": -0.64
+    },
+    {
+      "case": "street",
+      "env": "street",
+      "content": "music",
+      "mode": "boost",
+      "target_gain_db": {
+        "vocals": 0.5,
+        "drums": -0.7,
+        "bass": -1.2,
+        "other": -2.5
+      },
+      "applied_gain_db_last_frame": {
+        "vocals": 0.5,
+        "drums": -0.7,
+        "bass": -1.2,
+        "other": -2.5
+      },
+      "output_delta_db": -1.08
+    },
+    {
+      "case": "keyboard",
+      "env": "keyboard",
+      "content": "music",
+      "mode": "boost",
+      "target_gain_db": {
+        "vocals": 0.5,
+        "drums": -1.2,
+        "bass": 0.3,
+        "other": -1.0
+      },
+      "applied_gain_db_last_frame": {
+        "vocals": 0.5,
+        "drums": -1.2,
+        "bass": 0.3,
+        "other": -1.0
+      },
+      "output_delta_db": 0.25
+    },
+    {
+      "case": "wind",
+      "env": "wind",
+      "content": "music",
+      "mode": "boost",
+      "target_gain_db": {
+        "vocals": 0.5,
+        "drums": -0.2,
+        "bass": -1.7,
+        "other": -1.0
+      },
+      "applied_gain_db_last_frame": {
+        "vocals": 0.5,
+        "drums": -0.2,
+        "bass": -1.7,
+        "other": -1.0
+      },
+      "output_delta_db": -1.48
+    },
+    {
+      "case": "mac_duck",
+      "env": "quiet",
+      "content": "music",
+      "mode": "duck",
+      "target_gain_db": {
+        "vocals": 0.0,
+        "drums": -1.2,
+        "bass": -0.6,
+        "other": -1.2
+      },
+      "applied_gain_db_last_frame": {
+        "vocals": 0.0,
+        "drums": -1.2,
+        "bass": -0.6,
+        "other": -1.2
+      },
+      "output_delta_db": -0.54
+    },
+    {
+      "case": "env_off_street",
+      "env": "quiet",
+      "content": "music",
+      "mode": "boost",
+      "target_gain_db": {
+        "vocals": 0.5,
+        "drums": 0.8,
+        "bass": 0.8,
+        "other": 0.0
+      },
+      "applied_gain_db_last_frame": {
+        "vocals": 0.5,
+        "drums": 0.8,
+        "bass": 0.8,
+        "other": 0.0
+      },
+      "output_delta_db": 0.7
+    }
+  ]
+}

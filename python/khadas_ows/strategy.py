@@ -78,6 +78,117 @@ VIDEO_PROFILE: dict[str, float] = {
     "guitar": -0.5, "piano": 0.0, "other": 0.0,
 }
 
+# --- Environment decision layer (six-stem envelope) --------------------------
+#: Environment states derived from the board DMIC evidence stream. The layer shapes
+#: *contrast* (protect the lead, attenuate competitors); it never ducks by itself —
+#: conversation ducking stays a Mac-side gate (2026-11-10 field decision: background
+#: speech must not flatten the envelope).
+ENVIRONMENTS = ("quiet", "speech", "babble", "street", "office", "wind", "keyboard")
+
+#: Attenuation-only modifiers (dB) applied on top of the content profile. Ratios follow
+#: the legacy S3 `SCENARIO_TARGETS` (lead protected, rhythm/low sacrificed first), but are
+#: expressed as attenuation because boosting estimated stems amplifies leakage.
+ENV_MODIFIERS: dict[str, dict[str, float]] = {
+    "quiet": {},
+    "speech": {"vocals": 0.0, "drums": -3.0, "bass": -2.5,
+               "guitar": -2.0, "piano": -2.5, "other": -3.0},
+    "babble": {"vocals": 0.0, "drums": -2.0, "bass": -1.5,
+               "guitar": -1.2, "piano": -1.5, "other": -2.0},
+    "street": {"vocals": 0.0, "drums": -1.5, "bass": -2.0,
+               "guitar": -1.0, "piano": -1.5, "other": -2.5},
+    "office": {"vocals": 0.0, "drums": -1.0, "bass": -1.0,
+               "guitar": -0.5, "piano": -1.0, "other": -1.5},
+    "wind": {"vocals": 0.0, "drums": -1.0, "bass": -2.5,
+             "guitar": -0.5, "piano": -1.0, "other": -1.0},
+    "keyboard": {"vocals": 0.0, "drums": -2.0, "bass": -0.5,
+                 "guitar": -0.5, "piano": -0.5, "other": -1.0},
+}
+#: Floor for the composed target so one bad classification cannot mute a stem.
+ENV_TARGET_FLOOR_DB = -9.0
+
+
+def environment_from_evidence(evidence: dict | None) -> str:
+    """Map one board evidence frame to an environment state (priority ordered).
+
+    Accepts both context schemas in use: `listening_v0.2` (9 classes incl. horn/music)
+    and the Edge2-retrained 5-class model (babble/near_voice/other/quiet/street).
+    Returns "unknown" when the frame carries no usable label; the caller must treat
+    that as fail-open (quiet = identity, never a latched duck).
+    """
+    if not isinstance(evidence, dict) or not evidence:
+        return "unknown"
+    context = str(evidence.get("context") or "").strip().lower()
+    environment = str(evidence.get("environment") or "").strip().upper()
+    event = str(evidence.get("event") or "").strip().lower()
+    if bool(evidence.get("speech_active")) or event == "speech" or environment == "VOICE":
+        return "speech"
+    if context == "near_voice":
+        return "speech"
+    if event == "wind" or context == "wind":
+        return "wind"
+    if event == "keyboard":
+        return "keyboard"
+    if context == "babble":
+        return "babble"
+    if context in ("street", "horn"):
+        return "street"
+    if environment in ("NOISY", "LOUD") or context in ("other", "steady"):
+        return "office"
+    if context == "quiet" or environment == "QUIET":
+        return "quiet"
+    return "unknown"
+
+
+class EnvironmentTracker:
+    """Hysteresis for the environment decision.
+
+    A candidate state must persist `hold_windows` consecutive evidence windows before it
+    replaces the current one, so one wrong context label cannot pump the gains. Missing or
+    unusable evidence fails open to `quiet` (identity), never to a latched attenuation.
+    Speech entry can be faster (`fast_windows`) because missing an active talker is more
+    expensive than a late release; the release still needs `hold_windows`.
+    """
+
+    def __init__(self, hold_windows: int = 2, fast_windows: int = 1) -> None:
+        self.hold_windows = max(int(hold_windows), 1)
+        self.fast_windows = max(int(fast_windows), 1)
+        self.state: str | None = None
+        self._pending: str | None = None
+        self._held = 0
+        self.source = "unknown"
+
+    def update(self, env: str) -> str:
+        self.source = env if env in ENVIRONMENTS else "unknown"
+        if env not in ENVIRONMENTS:            # fail-open: no evidence -> identity
+            self.state, self._pending, self._held = "quiet", None, 0
+            return self.state
+        if self.state is None:
+            self.state = env
+            return self.state
+        if env == self.state:
+            self._pending, self._held = None, 0
+            return self.state
+        threshold = self.fast_windows if env == "speech" else self.hold_windows
+        if env == self._pending:
+            self._held += 1
+        else:
+            self._pending, self._held = env, 1
+        if self._held >= threshold:
+            self.state, self._pending, self._held = env, None, 0
+        return self.state
+
+
+def apply_environment(profile: dict[str, float], env: str) -> dict[str, float]:
+    """Compose a six-stem profile with the environment contrast (attenuation only)."""
+    state = env if env in ENVIRONMENTS else "quiet"
+    modifier = ENV_MODIFIERS[state]
+    return {
+        stem: max(ENV_TARGET_FLOOR_DB,
+                  min(1.5, float(profile.get(stem, 0.0)) + float(modifier.get(stem, 0.0))))
+        for stem in STEMMS6
+    }
+
+
 #: Legacy explicit per-role gain tables (`PROFILES` in Mac stem_remix.py), in dB.
 PROFILES: dict[str, dict[str, float]] = {
     "neutral_rebuild": {stem: 0.0 for stem in STEMMS6},
