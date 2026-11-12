@@ -339,3 +339,30 @@ delivery had visible PUA output, and **do not record a rating/score**.
 - PUA output visible: yes — tested the edge case the user asked about with a real rap sample,
   and rejected my own proposed classifier once the data showed it fails on speech.
 - Rating: **not recorded** (user instruction: 不记录评分).
+
+## 2026-11-12 — Edge six-stem algorithm committed and pushed to khadas main
+
+- Repo attribution correction: the edge-side six-stem algorithm belongs to `khadas-ows-node`;
+  the cores3 checkout's `tools/stem-ab-training/` is the training-side producer (weights), not the
+  on-device algorithm.
+- New commit `a57dc4e` (10 files): `model.py` RKNN boundary (`input_scale`, optional logits with
+  fp32 softmax on the CPU side); `convert_rknn.py` six-stem conversion controls
+  (`--stems/--float-dtype/--quant-dtype/--opt-level`); `export_rk_onnx.py` (RKNet log1p export +
+  onnxruntime parity); `export_six_onnx.py` (`--no-softmax`); five `models/six/*.manifest.json`
+  provenance files; `uv.lock` adds onnxruntime to the test extra.
+- Pushed `origin/main` `964ebe7 -> a57dc4e` (21 commits): includes `a978c33` (six-stem RK model in
+  the worker: 4/6-stem canonical masks + six-stem envelope execution), `effe055` (NCHW->NHWC),
+  plus `1ebb5af`/`29d6ffd` which were already present on `six-stem-onboard` / `edge2-a2dp-sink`.
+- Verification: `pytest tests/test_model.py tests/test_strategy.py tests/test_worker_streaming.py`
+  -> 26 passed; `git ls-remote origin main` = `a57dc4e`; `git branch -r --contains a978c33` shows
+  `origin/main`.
+- Residual risks recorded (not fixed): (a) weights are gitignored — `rk-6s.onnx` and the board's
+  `artifacts/rk-fused.rknn` are not archived anywhere in git; (b) `export_rk_onnx.py` hardcodes
+  `TRAIN_DIR` to the local cores3 training checkout, so khadas is not self-contained (the RKNet
+  class lives in the unpushed cores3 `train_rk.py`); (c) main now carries un-accepted 11-09..11-12
+  commits, so it is no longer the verified deploy baseline (`964ebe7` was) and no tag marks the
+  verified point; (d) `six-stem-onboard` / `edge2-a2dp-sink` are behind main.
+- PUA output visible: yes — ⚫百度味 research framing, `[PUA-DIAGNOSIS]` before acting, corrected
+  the earlier mis-attribution instead of re-justifying it, and evidence tables (`--contains`,
+  `ls-remote`, pytest) instead of prose claims.
+- Rating: **not recorded** (user instruction: 不记录评分).
