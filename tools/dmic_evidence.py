@@ -104,6 +104,48 @@ def frame_voice_likelihood(vocal_ratio: float, peakiness: float, flatness: float
     return band_term * peak_term * noise_term * spread_term * level_gate
 
 
+def periodicity(mono: np.ndarray, rate: int) -> float:
+    """Normalized autocorrelation peak over 2-12 ms lags (F0 83-500 Hz).
+
+    Edge2 DMIC measured 2026-11-09: near speech 0.35-0.42, blowing 0.18-0.25,
+    room noise 0.28-0.33.  This is the feature the CoreS3 rule set never had;
+    on this mic vocal_peak does not separate speech from wind.
+    """
+    x = mono - mono.mean()
+    lo = max(1, int(rate * 0.002))
+    hi = min(len(x) - 1, int(rate * 0.012))
+    step = max(1, rate // 6000)
+    best = 0.0
+    for lag in range(lo, hi + 1, step):
+        a = x[:-lag]
+        b = x[lag:]
+        denom = math.sqrt(float(np.dot(a, a)) * float(np.dot(b, b))) + 1e-12
+        value = float(np.dot(a, b)) / denom
+        if value > best:
+            best = value
+    return best
+
+
+def band_flatness(band_dbfs: np.ndarray) -> float:
+    """Flatness of the 300-4000 Hz vocal bands only (1/f room tilt excluded)."""
+    power = np.power(10.0, band_dbfs[VOCAL_BANDS] / 10.0)
+    return float(np.exp(np.mean(np.log(power + 1e-20))) / (np.mean(power) + 1e-20))
+
+
+def edge2_voice(pitch: float, vflat: float, level_dbfs: float) -> float:
+    """Speech likelihood for the Edge2 PDM array (2026-11-09 calibration).
+
+    Replaces the CoreS3 product formula: near-field speech carries strong LF
+    (mouth proximity) so vocal_ratio collapses and the old formula inverted the
+    answer (near speech 0.16, blowing 0.38).  Pitch periodicity + vocal-band
+    flatness + level gate separate the classes on this mic.
+    """
+    pitch_term = clamp01((pitch - 0.22) / 0.10)
+    tone_term = clamp01((0.18 - vflat) / 0.05)
+    level_gate = clamp01((level_dbfs + 66.0) / 8.0)
+    return pitch_term * tone_term * level_gate
+
+
 class ListeningModel:
     """ContextNet MLP 92-32-16-9; weights ported verbatim from main/listening_model.h."""
 
@@ -440,19 +482,29 @@ def window_features(base: np.ndarray, base_level: float,
     }
 
 
-def raw_classify(features: dict[str, float]) -> str:
-    if (features["low_share"] < KEYBOARD_LOW_SHARE
-            and features["std_mid"] > KEYBOARD_STD_MID
-            and features["cent"] > KEYBOARD_CENT
-            and (features["slope"] > KEYBOARD_SLOPE or features["cent"] > KEYBOARD_CENT_ESCAPE)):
-        return "keyboard"
-    if (features["slope"] < WIND_SLOPE
-            and features["vocal_peak"] < WIND_VOCAL_PEAK
-            and features["d_lo"] > WIND_D_LO
-            and features["range_lo"] > WIND_RANGE_LO):
-        return "wind"
-    if features["vocal_peak"] > SPEECH_VOCAL_PEAK:
+def raw_classify(features: dict[str, float], voice: float = 0.0,
+                 pitch: float = 0.0, vflat: float = 0.0) -> str:
+    """Edge2-calibrated event rules (2026-11-09, second calibration).
+
+    Measured on the board's own DMIC clips:
+      * near speech: periodicity 0.35-0.42, vocal-band flatness 0.06-0.14
+      * blowing:     periodicity 0.18-0.25, flatness 0.22-0.24, LF share > 0.7
+      * quiet room:  level_rel < 5 dB, flatness 0.20-0.24
+    Speech and wind are gated by level_rel > 6 dB so the floor never becomes an
+    event.  Keyboard/knock/friction keep the 2026-11-09 first calibration (they
+    are transient detectors; they no longer override speech/wind).
+    """
+    if features["level_rel"] > 4.0 and pitch >= 0.30 and vflat <= 0.16 and voice >= 0.5:
         return "speech"
+    if (features["level_rel"] > 8.0 and pitch < 0.26 and vflat > 0.18
+            and features["low_share"] > 0.70):
+        return "wind"
+    if features["d_mid"] > 5.0 and features["std_mid"] > 6.0:
+        return "keyboard"
+    if features["d_hi"] > 9.0 and features["std_mid"] < 8.0:
+        return "knock"
+    if features["d_mid"] < -10.0 or (features["std_mid"] > 4.5 and features["d_mid"] < -5.0):
+        return "friction"
     return "quiet"
 
 
@@ -477,7 +529,12 @@ def post_evidence(url: str, frame: dict) -> bool:
         # hold，街道/电视里的偶发人声会被放大成连续 speech（2026-11-09 现场：
         # 播街道声时媒体被压到 60.7%）。voice_likelihood 是乘积，街道声实测 0.04，
         # 近场说话 0.73，用它做门控不会误让位。
-        "conversation_cue": 1.0 if frame["voice_likelihood"] >= 0.5 else 0.0,
+        # 2026-11-10 现场："出现说话媒体就被压低、除非我参与对话否则应该做掩蔽"。
+        # 环境里的 speech ≠ 用户参与对话。对话让位是 **Mac 侧门**（声纹 self / LLM 确认，
+        # D42）才做的动作；板端给 conversation_cue 会让任何背景人声把 policy 顶到 ENGAGED
+        # → 媒体压 60% + 包络压平（掩蔽反而停了），而且键盘/风事件会阻止 ENGAGED 释放。
+        # 板端只提供 noise/voice/event 证据：voice 驱动 D41 掩蔽，对话让位交给 Mac。
+        "conversation_cue": 0.0,
         "own_voice": 0.0,
         "level_dbfs": frame["level_dbfs"],
         "event_blocked": event in ("keyboard", "wind"),
@@ -594,17 +651,23 @@ def main() -> int:
             flatness = float(clamp01(descriptors[1]))
             peakiness = float(descriptors[3])
             vocal_ratio = float(descriptors[2])
-            voice = frame_voice_likelihood(vocal_ratio, peakiness, flatness, excited, level_dbfs)
+            pitch = periodicity(mono, args.rate)
+            vflat = band_flatness(band_dbfs)
+            voice = edge2_voice(pitch, vflat, level_dbfs)
             history.append({"band_dbfs": band_dbfs, "broadband": level_dbfs, "valid": valid,
                             "t": now_s, "voice": voice, "flatness": flatness,
                             "peakiness": peakiness, "vocal_ratio": vocal_ratio,
-                            "excited": excited, "desc": descriptors})
+                            "excited": excited, "desc": descriptors,
+                            "pitch": pitch, "vflat": vflat})
             del history[:-CONTEXT_WINDOW_FRAMES]
             event = "quiet"
             recent = history[-WINDOW_FRAMES:]
             if tracker.ready and len(recent) == WINDOW_FRAMES and all(f["valid"] for f in recent):
                 features = window_features(tracker.base, tracker.level, recent)
-                event = machine.update(raw_classify(features), now_s)
+                pitch_med = float(np.median([f["pitch"] for f in recent]))
+                vflat_med = float(np.median([f["vflat"] for f in recent]))
+                event = machine.update(
+                    raw_classify(features, voice, pitch_med, vflat_med), now_s)
             elif not valid:
                 event = machine.update("artifact", now_s)
             if impulse in ("knock", "friction"):
@@ -612,7 +675,11 @@ def main() -> int:
                 impulse_hold_until = now_s + 1.5
             elif now_s > impulse_hold_until:
                 impulse_hold = "none"
-            if impulse_hold != "none":
+            # Keyboard typing also fires the transient detector; keyboard wins so
+            # typing is not reported as knock/friction (2026-11-09 field report).
+            # 2026-11-09 second calibration: transient detector may fill a silent
+            # frame, but never relabel a speech/wind frame (blowing gusts fire it).
+            if impulse_hold != "none" and event not in ("keyboard", "speech", "wind"):
                 event = impulse_hold
             environment = environment_label(event, level_dbfs)
             context = "unknown"
