@@ -173,6 +173,30 @@ def move_existing_inputs(sink: str) -> int:
     return moved
 
 
+def wait_for_pipewire_source(name: str, timeout_s: float) -> None:
+    """Wait until the phone's A2DP source node exists before opening capture.
+
+    `pw-record --target NAME` silently falls back to the default source when NAME is
+    missing, so a relay started before the phone streams used to grab the DMIC array and
+    hold hw:2,0 busy (dmic_evidence then failed to open it). Gate on the node instead.
+    """
+    deadline = None if timeout_s <= 0 else time.monotonic() + timeout_s
+    while not _stop.is_set() and (deadline is None or time.monotonic() < deadline):
+        try:
+            listing = subprocess.run(
+                ["pactl", "list", "short", "sources"],
+                capture_output=True, text=True, timeout=3.0).stdout
+        except (OSError, subprocess.SubprocessError):
+            listing = ""
+        for line in listing.splitlines():
+            fields = line.split("\t")
+            if len(fields) > 1 and fields[1] == name:
+                return
+        time.sleep(1.0)
+    raise RuntimeError(f"PipeWire source {name!r} did not appear "
+                       f"within {timeout_s:g}s (--start-timeout 0 waits)")
+
+
 def direct_links(source: str, sink: str, *, connect: bool) -> None:
     """Connect or disconnect only the direct Bluetooth source->sink stereo links."""
     option = "" if connect else "-d"
@@ -489,6 +513,8 @@ def main(argv: list[str] | None = None) -> int:
                 "parec", f"--device={source}", "--format=float32le", f"--rate={SAMPLE_RATE}",
                 f"--channels={CHANNELS}", f"--latency-msec={args.capture_latency_ms}",
             ]
+        if args.pipewire_source:
+            wait_for_pipewire_source(args.pipewire_source, args.start_timeout)
         capture = subprocess.Popen(
             capture_command, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
         if args.pipewire_source:

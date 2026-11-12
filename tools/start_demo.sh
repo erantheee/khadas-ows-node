@@ -25,7 +25,11 @@ for pat in "build/khadas-ows-node" "khadas_ows.worker" "tools/dmic_evidence.py";
 done
 sleep 1
 
-export KHADAS_MODEL_HASH=$(sha256sum artifacts/candidate-v0-t88.fp.rknn | cut -d' ' -f1)
+# BLAS spin-wait threads burned 5 cores at 100% on the board (dmic_evidence measured
+# 399% CPU) and starved the relay/PipeWire threads -> audible dropouts.
+export OPENBLAS_NUM_THREADS=1
+export OMP_NUM_THREADS=1
+export KHADAS_MODEL_HASH=$(sha256sum artifacts/rk-fused.rknn | cut -d' ' -f1)
 export KHADAS_CLIENT_TIMEOUT_MS=15000
 export KHADAS_WORKER_TIMEOUT_MS=6000
 
