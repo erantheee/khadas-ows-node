@@ -468,3 +468,29 @@ delivery had visible PUA output, and **do not record a rating/score**.
   and fixed by tests (unwired `--evidence-file`, `speech_active` still ducking), A/B table
   as evidence instead of prose.
 - Rating: **not recorded** (user instruction: 不记录评分).
+
+## 2026-11-12 (fifth record) — real-audio chain: env layer live, relay arming fix
+
+- Instruction: "现在手机-khadas-耳机是通的，你继续就好了" — continue on real audio.
+  No rating recorded.
+- Verified on real music before the A/B attempt:
+  - relay captured 96 s, worker processed 4 s packets at RTF ~0.75-0.84, node
+    `actual_mode=npu`, 0 relay fallbacks in the first run.
+  - the environment layer classified real windows: 46 `street`, 7 `speech`, 5 `keyboard`
+    (no `quiet`); e.g. `env=street` target vocals +0.5 / drums -0.7 / bass -1.2 / other -2.5.
+  - the processed stream was audible: sink-monitor capture 20.1 s, RMS -24.9 dBFS,
+    band shares low 78.1 % / mid 13.2 % / high 2.3 % (not bypassed silence).
+- Invalid measurement recorded as such: the env on/off A/B killed the worker, the node fell
+  back, iOS paused on route loss, and the relay exited on "stayed silent for 15 seconds".
+  The env-off capture is digital silence (-240 dBFS) and must not be used as a result.
+- Root cause + fix `5865320`: the relay had a fixed 15-chunk startup window with no re-arm.
+  `--start-timeout N` (0 = wait until the phone plays) keeps the relay armed; the current
+  board relay is armed (`--start-timeout 0`, PID 10979) with the worker on `--env-decision on`
+  (PID 10534). Direct links stay until capture is non-silent, then are removed.
+- Open: the clean A/B needs the phone playing again (the A2DP source node is absent while
+  paused). Suspect self-playback bleed: with open-ear headphones the DMIC hears our own
+  music (46/58 windows classified `street`, none `quiet`), so the env layer needs an
+  own-playback guard before it can be trusted on real content.
+- PUA output visible: yes — diagnosis before touching the live chain, refused to present the
+  invalid capture as an A/B result, found and fixed the relay arming bug.
+- Rating: **not recorded** (user instruction: 不记录评分).
