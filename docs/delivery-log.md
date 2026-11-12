@@ -627,3 +627,23 @@ delivery had visible PUA output, and **do not record a rating/score**.
 - PUA output visible: yes — diagnosed from the gain trajectory instead of blaming the BT
   link, and fixed the pumping without touching the audio path.
 - Rating: **not recorded** (user instruction: 不记录评分).
+
+## 2026-11-12 (eleventh record) — premise retraction: the mic hears the room, not the earbuds
+
+- User correction: "麦在板子上，不在耳机上…不该存在外放的漏音这个概念". Accepted. No rating
+  recorded.
+- Evidence against the bleed premise: `dmic_context=horn` (0.88-0.91) persisted while the
+  phone A2DP stream was digitally silent (-240 dBFS), so the `street` label came from the
+  room's own horn-like ambient, and the speech episodes were real speech (the user talking
+  to the session). The own-playback guard was built on an unverified theory and is now off
+  by default.
+- "程序瘦身" answered with data: the choppiness was not compute (underruns=0, load ~0.4,
+  RTF ~0.66, 30 s capture with zero gaps), so slimming the program wouldn't change it.
+  What was too heavy was the *response*: `0c34a2a` halves the speech/babble deltas, maps
+  horn -> office, and slows the tracker (2 windows in, 3 out).
+- Board trajectory after the change: room ambient sits at `env=office` drums -0.2; one
+  speech episode dipped drums to -0.7 and recovered over ~5 windows. No pumping.
+- PUA output visible: yes — retracted the unverified premise in writing, kept the guard as
+  an explicit opt-in instead of deleting evidence, and verified the gentler response on the
+  board before claiming it.
+- Rating: **not recorded** (user instruction: 不记录评分).
