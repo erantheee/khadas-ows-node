@@ -11,15 +11,23 @@ class FreqGating(nn.Module):
 
 class MaskNetwork(nn.Module):
     """NPU boundary: real magnitude [B,2,F,T] -> masks [B,4,F,T]."""
-    def __init__(self, base: int = 128, layers: int = 6, stems: int = 4):
+    def __init__(self, base: int = 128, layers: int = 6, stems: int = 4,
+                 input_scale: float = 1.0, apply_softmax: bool = True):
         super().__init__(); blocks=[]; channels=2
         for _ in range(layers):
             blocks += [nn.Conv2d(channels, base, (1,3), padding=(0,1)), nn.BatchNorm2d(base), nn.PReLU(),
                        nn.Conv2d(base, base, (3,1), padding=(1,0)), nn.BatchNorm2d(base), nn.PReLU()]
             channels=base
         self.blocks=nn.Sequential(*blocks); self.gate=FreqGating(base); self.mask=nn.Conv2d(base, stems, 1)
+        self.input_scale = float(input_scale)
+        self.apply_softmax = bool(apply_softmax)
     def forward(self, magnitude: torch.Tensor) -> torch.Tensor:
-        return torch.softmax(self.mask(self.gate(self.blocks(magnitude))), dim=1)
+        if self.input_scale != 1.0:
+            magnitude = magnitude / self.input_scale
+        logits = self.mask(self.gate(self.blocks(magnitude)))
+        if not self.apply_softmax:
+            return logits  # RKNN fp16 boundary: keep softmax on the CPU side
+        return torch.softmax(logits, dim=1)
 
 def load_legacy_checkpoint(path: str) -> MaskNetwork:
     model=MaskNetwork(); state=torch.load(path, map_location="cpu", weights_only=True)

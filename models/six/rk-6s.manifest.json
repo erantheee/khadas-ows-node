@@ -1,0 +1,21 @@
+{
+  "stems": 6,
+  "base": 96,
+  "layers": 4,
+  "params": 199418,
+  "input_mode": "log1p",
+  "input_shape": [
+    1,
+    2,
+    1025,
+    345
+  ],
+  "output_shape": [
+    1,
+    6,
+    1025,
+    345
+  ],
+  "opset": 18,
+  "torch_vs_onnx_max_abs": 5.960464477539063e-08
+}

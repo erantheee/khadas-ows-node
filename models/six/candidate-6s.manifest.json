@@ -1,0 +1,20 @@
+{
+  "stems": 6,
+  "params": 551074,
+  "checkpoint": "/Users/eranthe/Documents/Codex/2026-10-13/cores3-noise-adapt-demo/work/stem-ab/runs/six_stem/band_split_six.pt",
+  "input_shape": [
+    1,
+    2,
+    1025,
+    345
+  ],
+  "output_shape": [
+    1,
+    6,
+    1025,
+    345
+  ],
+  "opset": 18,
+  "torch_vs_onnx_max_abs": 2.682209014892578e-07,
+  "torch_vs_onnx_cosine": 1.0
+}
