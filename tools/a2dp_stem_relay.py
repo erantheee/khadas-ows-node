@@ -183,15 +183,15 @@ def wait_for_pipewire_source(name: str, timeout_s: float) -> None:
     deadline = None if timeout_s <= 0 else time.monotonic() + timeout_s
     while not _stop.is_set() and (deadline is None or time.monotonic() < deadline):
         try:
+            # pactl/pipewire-pulse does NOT list bluez_input sources on this board even
+            # when the node exists; pw-cli sees the real PipeWire graph.
             listing = subprocess.run(
-                ["pactl", "list", "short", "sources"],
+                ["pw-cli", "ls", "Node"],
                 capture_output=True, text=True, timeout=3.0).stdout
         except (OSError, subprocess.SubprocessError):
             listing = ""
-        for line in listing.splitlines():
-            fields = line.split("\t")
-            if len(fields) > 1 and fields[1] == name:
-                return
+        if f'node.name = "{name}"' in listing:
+            return
         time.sleep(1.0)
     raise RuntimeError(f"PipeWire source {name!r} did not appear "
                        f"within {timeout_s:g}s (--start-timeout 0 waits)")
