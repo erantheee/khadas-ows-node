@@ -366,3 +366,43 @@ delivery had visible PUA output, and **do not record a rating/score**.
   the earlier mis-attribution instead of re-justifying it, and evidence tables (`--contains`,
   `ls-remote`, pytest) instead of prose claims.
 - Rating: **not recorded** (user instruction: 不记录评分).
+
+## 2026-11-12 (second record) — board live-state audit + training-asset map (read-only)
+
+- Scope: answer two questions with evidence — (a) is the Edge2 currently running the
+  environment/envelope algorithm, (b) where the previously trained artifacts live. No code
+  changes, no restart, no model swap.
+- Board state (verified by ssh, 2026-11-12 09:57–09:58 UTC):
+  - worker PID 2401 runs `--mode npu --model artifacts/rk-fused.rknn --window-frames 345
+    --output-mode envelope --policy roles --listening-mode auto --attack-ms 800 --release-ms 2000
+    --gate-floor-db -100 --gate-full-db -90 --eq-depth 1.3 --masking-dose 1.0 --max-positive-db 3.0`.
+  - envelope chain is in the path and shaping gains: banner `mode=envelope scenario=quiet`;
+    packets up to seq=143 carry non-zero `target_db`/`applied_db`; last packet 09:47:22 UTC.
+  - idle since then: `/v1/status` `packets=144`, `engaged=false`, `policy_state=IDLE`,
+    `ambient_intent=false`; relay PID 2789 socket to 127.0.0.1:9100 in CLOSE-WAIT; phone A2DP
+    source absent (only the Anker headset sink connected).
+  - environment layer: the roles path never reads `scenario`/`environment`; DMIC `context=horn
+    (0.91)` and `dmic_environment=QUIET` only reach `/v1/status` and `tools/board_display.py`.
+    Board `worker.py`/`strategy.py` sha256 equal the local checkout.
+- Training-asset map (all present, none deleted): `models/six/candidate-6s-final.onnx` (2.1 MB)
+  + board `artifacts/rk-fused.rknn` (19 MB) — live; `models/candidate-v0.pt` +
+  `models/rknn/candidate-v0.{fp,int8}.rknn` (35 MB) — archived; `models/listening_v0.2.json`
+  (52 KB, 9 classes) — live in dmic_evidence; Edge2-retrained v0.3/v0.4/v0.5 in cores3
+  `experiments/listening-model/artifacts/` (26 MB; v0.5 val acc 0.8448);
+  `experiments/scene-model/artifacts/v0.1-s3-scene.json` (32 KB, telemetry-only S3 head);
+  `experiments/event-classifier/event_lr_v1.json` (5 KB, 0.721, contaminated labels);
+  cores3 `experiments/sound-events` (1.2 GB) + `ear-context` (405 MB); data caches
+  `work/stem-ab` (62 GB) + `work/tse-p0` (2.3 GB).
+- Findings raised (not fixed): (1) board `models/model_v0.5.json` is referenced by no code and the
+  service starts without `--model`, so the live context model is v0.2-s3 — proven by
+  `context=horn`, a class absent from v0.5's 5-class schema; (2) `experiments/event-classifier` is
+  untracked (`git ls-files experiments` empty); (3) the running worker carries `--eq-depth`,
+  `--masking-dose`, `--max-positive-db`, absent from `~/restart_board_worker.sh`, so a watchdog
+  restart changes behaviour.
+- Verification: process cmdlines and `/proc/*/environ`; `/v1/status`; worker log banner + packet
+  lines; `ss -tnp` (9100 CLOSE-WAIT); `sha256sum` local↔board; `git ls-files experiments`; JSON
+  class lists; `du -sh`.
+- PUA output visible: yes — Alibaba-flavored narration (conclusion first, closed-loop wording),
+  two evidence tables, `[PUA生效 🔥]` on the v0.5-not-wired and classifier-untracked findings;
+  zero attempted-but-unaccepted experiments, so no pressure escalation.
+- Rating: **not recorded** (user instruction: 不记录评分).
