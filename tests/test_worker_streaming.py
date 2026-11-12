@@ -216,7 +216,8 @@ def test_environment_decision_shapes_envelope_targets(tmp_path):
     evidence = tmp_path / "evidence.json"
     _write_evidence(evidence, {"context": "street", "environment": "NOISY",
                                "event": "quiet", "band_dbfs": [0.0] * 24})
-    packet = sine_packet(1.0)
+    # quiet input keeps the own-playback guard from demoting the street state
+    packet = sine_packet(1.0, amplitude=0.0005)
     reference = W.StreamingWindowManager(
         W.StubBackend(), output_mode="envelope", policy="roles",
         evidence_file=str(evidence), env_decision="off")
@@ -255,7 +256,7 @@ def test_board_speech_evidence_masks_instead_of_ducking(tmp_path):
     manager = W.StreamingWindowManager(
         W.StubBackend(), output_mode="envelope", policy="roles",
         evidence_file=str(evidence))
-    manager.process(sine_packet(1.0), CHANNELS)
+    manager.process(sine_packet(1.0, amplitude=0.0005), CHANNELS)
     entry = manager.role_history[-1]
     assert entry["environment"] == "speech"
     assert entry["mode"] == "boost"                       # no duck without the Mac cue
@@ -273,3 +274,41 @@ def test_mac_conversation_cue_still_ducks(tmp_path):
     entry = manager.role_history[-1]
     assert entry["mode"] == "duck"
     assert entry["target_gain_db"]["drums"] == -1.2
+
+
+def test_media_guard_demotes_content_env_states_during_playback(tmp_path):
+    """Open-ear leakage: speech/babble/street must not pump the mix while media plays."""
+    evidence = tmp_path / "evidence.json"
+    _write_evidence(evidence, {"context": "street", "environment": "NOISY",
+                               "event": "quiet", "band_dbfs": [0.0] * 24})
+    manager = W.StreamingWindowManager(
+        W.StubBackend(), output_mode="envelope", policy="roles",
+        evidence_file=str(evidence))
+    manager.process(sine_packet(1.0, amplitude=0.5), CHANNELS)   # hold 2 windows
+    manager.process(sine_packet(1.0, amplitude=0.5), CHANNELS)
+    entry = manager.role_history[-1]
+    assert entry["media_active"] is True
+    assert entry["environment"] == "quiet"                        # street demoted
+
+
+def test_media_guard_keeps_physical_env_states_during_playback(tmp_path):
+    evidence = tmp_path / "evidence.json"
+    _write_evidence(evidence, {"context": "other", "environment": "NOISY",
+                               "event": "wind", "band_dbfs": [0.0] * 24})
+    manager = W.StreamingWindowManager(
+        W.StubBackend(), output_mode="envelope", policy="roles",
+        evidence_file=str(evidence))
+    manager.process(sine_packet(1.0, amplitude=0.5), CHANNELS)
+    entry = manager.role_history[-1]
+    assert entry["environment"] == "wind"
+
+
+def test_media_guard_off_keeps_street_during_playback(tmp_path):
+    evidence = tmp_path / "evidence.json"
+    _write_evidence(evidence, {"context": "street", "environment": "NOISY",
+                               "event": "quiet", "band_dbfs": [0.0] * 24})
+    manager = W.StreamingWindowManager(
+        W.StubBackend(), output_mode="envelope", policy="roles",
+        evidence_file=str(evidence), env_media_guard="off")
+    manager.process(sine_packet(1.0, amplitude=0.5), CHANNELS)
+    assert manager.role_history[-1]["environment"] == "street"

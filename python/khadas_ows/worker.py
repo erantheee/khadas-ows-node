@@ -310,6 +310,10 @@ def make_backend(name: str, model_path: str | None, expected_sha256: str | None 
 class StreamingWindowManager:
     """Run a fixed-shape [1,2,1025,345] model over arbitrary-length packets."""
 
+    #: Input level above which the board counts as "media playing". Open-ear playback leaks
+    #: into the DMIC, so content-like environment states are not trusted while media is active.
+    MEDIA_LEVEL_DB = -45.0
+
     def __init__(
         self,
         backend,
@@ -323,6 +327,7 @@ class StreamingWindowManager:
         gain_smooth_frames: int = 0,
         listening_mode: str = "auto",
         env_decision: str = "on",
+        env_media_guard: str = "on",
         boost_gains: dict[str, float] | None = None,
         duck_gains: dict[str, float] | None = None,
         output_gain: str = "peak",
@@ -355,9 +360,18 @@ class StreamingWindowManager:
         if env_decision not in ("on", "off"):
             raise WorkerError(f"env_decision must be 'on' or 'off', got {env_decision!r}")
         self.env_decision = env_decision
+        if env_media_guard not in ("on", "off"):
+            raise WorkerError(f"env_media_guard must be 'on' or 'off', got {env_media_guard!r}")
+        self.env_media_guard = env_media_guard
         #: Environment contrast from DMIC evidence (quiet/speech/babble/street/office/wind/
         #: keyboard). It shapes gains only; conversation ducking remains the Mac-side gate.
         self.env_tracker = role_strategy.EnvironmentTracker()
+        #: Own-playback guard state: the open-ear music leaks into the DMIC and gets labelled
+        #: speech/babble/street, which made the mix pump. Media-active windows only trust
+        #: physical states (quiet/wind/keyboard).
+        self._media_hold = 0
+        self.media_active = False
+        self._last_input_rms_db = -120.0
         self.env_state = "quiet"
         self.env_source = "unknown"
         self.envelope = role_strategy.EnvelopeFollower(
@@ -416,7 +430,10 @@ class StreamingWindowManager:
             "video": dict(role_strategy.VIDEO_PROFILE),
         }
         self._content_type: str | None = None
-        self._content_history: deque = deque(maxlen=2)
+        # Three agreeing windows are required to flip the content type: with 1 s packets
+        # a 2-window unanimity let quiet bass passages flip music<->video every ~8 s,
+        # stacking -1.8 dB on drums/bass and making the output audibly pump (2026-11-12).
+        self._content_history: deque = deque(maxlen=3)
         self.gate_floor_db = float(gate_floor_db)
         self.gate_full_db = float(gate_full_db)
         if not self.gate_floor_db < self.gate_full_db:
@@ -488,6 +505,8 @@ class StreamingWindowManager:
                 raise WorkerError("--stream-overlap-frames requires --output-mode envelope")
             return self._process_streaming(source)
         spectrum = stft(source)  # complex64 [2,1025,T]
+        rms_in = float(np.sqrt(np.mean(source.astype(np.float64) ** 2)) + 1e-12)
+        self._last_input_rms_db = 20.0 * np.log10(rms_in)
         magnitude = np.abs(spectrum)
         masks = self.masks(magnitude)  # [1,4,1025,T]
         if self.output_mode == "envelope":
@@ -802,6 +821,18 @@ class StreamingWindowManager:
         # top of it (that would double-count and flatten the mix).
         env_source = (role_strategy.environment_from_evidence(evidence)
                       if self.env_decision == "on" else "unknown")
+        # Own-playback guard: while the board is playing media, the DMIC hears the open-ear
+        # leakage, so content-like environment states (speech/babble/street/office) demote to
+        # quiet (fail-open); physical states (wind/keyboard) stay. The Mac conversation gate
+        # still ducks through mode=duck.
+        if self._last_input_rms_db > self.MEDIA_LEVEL_DB:
+            self._media_hold = min(self._media_hold + 1, 4)
+        else:
+            self._media_hold = max(self._media_hold - 1, 0)
+        self.media_active = self._media_hold >= 2
+        if (self.media_active and self.env_media_guard == "on"
+                and env_source not in ("quiet", "wind", "keyboard")):
+            env_source = "unknown"
         self.env_state = self.env_tracker.update(env_source)
         self.env_source = self.env_tracker.source
         if engaged:
@@ -841,6 +872,7 @@ class StreamingWindowManager:
             "content_type": content,
             "environment": self.env_state,
             "env_source": self.env_source,
+            "media_active": self.media_active,
             "stem_count": n_stems,
             "roles": roles,
             "stem_rms_db": {stem: round(stats_db[stem], 2) for stem in exec_stems},
@@ -964,6 +996,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--env-decision", dest="env_decision", choices=("on", "off"),
                         default="on",
                         help="environment contrast from DMIC evidence (default on; off = content only)")
+    parser.add_argument("--env-media-guard", dest="env_media_guard", choices=("on", "off"),
+                        default="on",
+                        help="while media is playing, only trust physical env states "
+                             "(quiet/wind/keyboard); demote content-like ones (default on)")
     parser.add_argument("--boost-gains", type=json.loads, default=None,
                         help="JSON gain map override for boost mode")
     parser.add_argument("--duck-gains", type=json.loads, default=None,
@@ -1045,6 +1081,7 @@ def main(argv: list[str] | None = None) -> int:
             attack_ms=args.attack_ms, release_ms=args.release_ms,
             gain_smooth_frames=args.gain_smooth_frames,
             listening_mode=args.listening_mode, env_decision=args.env_decision,
+            env_media_guard=args.env_media_guard,
             boost_gains=args.boost_gains,
             duck_gains=args.duck_gains,
             output_gain=output_gain, output_mode=output_mode, scenario=scenario,

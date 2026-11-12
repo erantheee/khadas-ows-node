@@ -90,6 +90,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--outdir", default="/tmp/env-ab")
     parser.add_argument("--env", default="quiet,street,speech,babble,wind,keyboard")
     parser.add_argument("--baseline", action="store_true", help="also render env-decision=off")
+    parser.add_argument("--media-guard", choices=("on", "off"), default="off",
+                        help="own-playback guard (default off: renders preview every env state)")
     parser.add_argument("--backend", default="stub", choices=("stub", "torch", "rknnlite"))
     parser.add_argument("--model", help="torch .pt or RKNN .rknn for the chosen backend")
     parser.add_argument("--window-frames", type=int, default=345)
@@ -116,7 +118,8 @@ def main(argv: list[str] | None = None) -> int:
         tmp.write_text(json.dumps(payload))
         manager = W.StreamingWindowManager(
             backend, output_mode="envelope", policy="roles", listening_mode="auto",
-            env_decision=env_decision, evidence_file=str(tmp), output_gain="unity",
+            env_decision=env_decision, env_media_guard=args.media_guard,
+            evidence_file=str(tmp), output_gain="unity",
             window_frames=args.window_frames)
         output = run(manager, pcm, chunk, refresh=lambda: tmp.touch())
         write_wav(outdir / f"{label}.wav", output)
