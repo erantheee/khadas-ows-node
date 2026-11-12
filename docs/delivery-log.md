@@ -436,3 +436,35 @@ delivery had visible PUA output, and **do not record a rating/score**.
   secret/absolute-path scan before the first commit, commits grouped by workstream,
   test + push evidence instead of prose claims.
 - Rating: **not recorded** (user instruction: 不记录评分).
+
+## 2026-11-12 (fourth record) — environment decision layer for the six-stem envelope
+
+- Instruction: "环境决策-6分轨的包络调节，你得做啊" — build the missing decision skeleton.
+  No rating recorded.
+- Delivery `2e29a1b` `feat(env)`:
+  - `strategy.py`: environment states quiet/speech/babble/street/office/wind/keyboard mapped
+    from the board DMIC evidence (both context schemas), attenuation-only modifiers derived
+    from the legacy S3 `SCENARIO_TARGETS` ratios, 2-window hysteresis with fast speech entry,
+    fail-open to quiet (identity, never a latched attenuation), floor clamp.
+  - `worker.py`: environment layer wired into the envelope path (`--env-decision on|off`),
+    per-packet log field `env=...`; ducking now requires the Mac-side `conversation_cue`
+    only — board speech feeds contrast instead (2026-11-10 decision); `--evidence-file`
+    now actually reaches `BoardTuner` (it previously fed an unused reader).
+  - `tools/restart_board_worker.sh` tracked in-repo (env on, eq-depth flags aligned).
+- Verification:
+  - `pytest -q tests/test_strategy.py tests/test_worker_streaming.py` -> 32 passed
+    (new: evidence->state priority, hysteresis + fail-open, attenuation-only composition,
+    board-speech-masks-vs-Mac-cue-ducks split, stale evidence fail-open).
+  - Offline torch A/B (synthetic music, 4 s window): quiet vocals +0.5 / drums +0.8 /
+    bass +0.8; near_voice drums -2.2 / bass -1.7; street drums -0.7 / bass -1.2;
+    Mac duck mode = duck; `env=off` identical to quiet -> `docs/evidence/environment-decision-20261112.json`.
+  - Board, `rk-fused.rknn` six stems: offline check gives speech drums -2.2 / other -3.0;
+    live end-to-end via `pcm_client` (2 x 4 s packets) -> worker log `env=street`, applied
+    gains equal the street modifiers, RTF 0.25-0.31, `/v1/status` packets 144->146,
+    `actual_mode=npu`. Board backups `python/khadas_ows/*.bak-101825`.
+- Boundary: the environment layer shapes contrast only; it never ducks. No listening
+  judgement is claimed (human step). Latency remains the 4.005 s prototype window.
+- PUA output visible: yes — `[PUA-DIAGNOSIS]` before implementation, two real defects found
+  and fixed by tests (unwired `--evidence-file`, `speech_active` still ducking), A/B table
+  as evidence instead of prose.
+- Rating: **not recorded** (user instruction: 不记录评分).
