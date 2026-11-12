@@ -418,6 +418,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--preroll", type=int, default=2,
                         help="processed chunks queued before playback starts (default 2)")
     parser.add_argument("--preroll-timeout", type=float, default=30.0)
+    parser.add_argument("--start-timeout", type=float, default=15.0,
+                        help="seconds to wait for non-silent source audio before moving "
+                             "the links; 0 = wait until the phone starts playing")
     parser.add_argument("--node-timeout", type=float, default=10.0)
     parser.add_argument("--sink", help="playback sink name (default: first USB sink)")
     parser.add_argument("--null-sink", default="a2dp_stem_in",
@@ -493,7 +496,8 @@ def main(argv: list[str] | None = None) -> int:
             # has observed a genuinely non-silent window. A fixed delay races
             # iOS stream startup and can strand bluez_input in digital silence.
             first_audio = None
-            for _ in range(15):
+            deadline = None if args.start_timeout <= 0 else time.monotonic() + args.start_timeout
+            while not _stop.is_set() and (deadline is None or time.monotonic() < deadline):
                 candidate = read_pipe_chunk(capture, chunk_bytes)
                 if candidate is None:
                     break
@@ -502,7 +506,9 @@ def main(argv: list[str] | None = None) -> int:
                     first_audio = candidate
                     break
             if first_audio is None:
-                raise RuntimeError("PipeWire source stayed silent for 15 seconds")
+                raise RuntimeError(
+                    "PipeWire source stayed silent for "
+                    f"{args.start_timeout:g}s (--start-timeout 0 waits for playback)")
             in_q.put(first_audio)
             direct_links(source, sink, connect=False)
             direct_unlinked = True

@@ -15,6 +15,9 @@ phone --A2DP--> Edge2 --six-stem NPU envelope--> A2DP headset
 4. Select `Khadas` as the phone's playback device and start non-silent audio.
 5. Start `a2dp_stem_relay.py` only after its native PipeWire capture observes
    non-silence. It removes only the direct stereo links and restores them on exit.
+   Pass `--start-timeout 0` to keep the relay armed until the phone starts playing;
+   the default 15 s window exits on a paused phone (learned 2026-11-12: an A/B worker
+   restart made iOS pause on route loss and the relay died, leaving a silent chain).
 
 ```sh
 tools/a2dp_phone_headset_connect.sh PHONE_MAC HEADSET_MAC
