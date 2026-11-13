@@ -62,6 +62,15 @@ STEMS = 4  # legacy four-stem layout; six-stem RK models report 6
 _SIX_STEMS = ("vocals", "drums", "bass", "guitar", "piano", "other")
 #: 面板档位控制（node POST /v1/tuning 写入）：/tmp/tuning-control.json
 TUNING_CONTROL_PATH = "/tmp/tuning-control.json"
+#: Demo 基线两档（Mac systemeq.swift 同款，直接加在最终增益上、不乘深度）：
+#: basic = ±1.3 dB 轻量 Harman 形态；aggressive = "demo 要明显" ×2 版（中高频 +5~6 dB）。
+#: 面板档位经 depth/dose 热加载区分（dose<=0.6 关档无基线）。
+DEMO_BASIC_DB = (0.0, 0.0, 0.0, -0.6, -0.6, -0.4, -0.2, -0.1,
+                 0.0, 0.4, 0.7, 0.9, 1.1, 1.2, 1.3, 1.3,
+                 1.1, 0.9, 0.7, 0.5, 0.4, 0.4, 0.2, 0.0)
+DEMO_AGGRESSIVE_DB = (0.0, 0.0, 0.0, -4.5, -4.5, -3.0, -1.5, -1.5,
+                      3.0, 4.5, 6.0, 7.5, 9.0, 9.0, 9.0, 9.0,
+                      7.5, 6.0, 6.0, 6.0, 7.5, 9.0, 9.0, 7.5)
 WINDOW_SECONDS = MODEL_FRAMES * HOP / SAMPLE_RATE  # 4.005 s
 
 
@@ -782,6 +791,11 @@ class StreamingWindowManager:
         `pcm_frames` is the number of time-domain samples in the packet; the STFT frame
         count (masks.shape[-1]) is what the per-frame gain envelope walks over.
         """
+        # Panel-gear hot-load loop (10 Hz) must run on every processing path: the
+        # non-streaming path bypasses _process_streaming, where start_control_loop()
+        # historically lived, so /tmp/tuning-control.json was never read and the panel
+        # gear never reached the six-stem envelope. Idempotent (_control_started).
+        self.start_control_loop()
         stft_frames = int(masks.shape[-1])
         n_stems = int(masks.shape[1])
         # Execution schema follows the model: the legacy candidate emits 4 stems, the
@@ -841,6 +855,11 @@ class StreamingWindowManager:
             profile = role_strategy.apply_environment(
                 self.content_profiles.get(content, self.boost_profile), self.env_state)
         target = {stem: float(profile.get(stem, 0.0)) for stem in exec_stems}
+        # 2a') panel gear: 档位只切换 demo 基线（Mac systemeq 语义，见下方 weights）。
+        # 六轨环境包络保持原值——之前档位乘数(panel_scale)放大了六轨高频压制，
+        # 与 demo 基线的高频抬升对冲，两档听感差被抵消。
+        panel_dose = float(getattr(self.tuner, "masking_dose", 1.0) or 1.0)
+        panel_depth = float(getattr(self.tuner, "depth", 1.3) or 1.3)
         # 2b) low-level gate: scale the target by how far the frame sits below the window peak.
         # Quiet frames fade the processing to bypass, so the time-varying spectral gain does
         # not add its modulation texture to silent passages (measured -13 dB residual there).
@@ -862,6 +881,18 @@ class StreamingWindowManager:
                 gain_frames[s] = np.convolve(gain_frames[s], k, mode="same")
         linear = (10.0 ** (gain_frames / 20.0)).astype(np.float32)  # [n_stems, T]
         weights = np.einsum("st,sft->ft", linear, masks[0])  # [1025,T]
+        # Demo 基线（Mac systemeq 同款，直接乘在最终增益上、不乘深度）：这是 Mac
+        # 执行端"切档可闻"的来源——六轨软分离会把 per-stem 增益稀释到听不见，
+        # 基线曲线对全频谱施加固定形态，档位切换一耳朵可辨。关档（dose<=0.6）无基线。
+        if panel_dose <= 0.6:
+            demo_gain = np.ones(FREQ_BINS, dtype=np.float32)
+        else:
+            demo_db = DEMO_AGGRESSIVE_DB if panel_depth >= 1.5 else DEMO_BASIC_DB
+            demo_bin = np.asarray(
+                self.tuner.band_map.gains_to_bins(np.asarray(demo_db, dtype=np.float64)),
+                dtype=np.float32)  # [1025]
+            demo_gain = (10.0 ** (demo_bin / 20.0)).astype(np.float32)
+        weights = weights * demo_gain[:, None]  # [1025,T]
         if weights.shape != spectrum.shape[-2:]:
             raise WorkerError(f"envelope weights shape {weights.shape} != spectrum {spectrum.shape[-2:]}")
         remixed_spec = spectrum * weights.astype(np.complex64)
