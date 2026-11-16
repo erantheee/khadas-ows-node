@@ -71,6 +71,12 @@ DEMO_BASIC_DB = (0.0, 0.0, 0.0, -0.6, -0.6, -0.4, -0.2, -0.1,
 DEMO_AGGRESSIVE_DB = (0.0, 0.0, 0.0, -4.5, -4.5, -3.0, -1.5, -1.5,
                       3.0, 4.5, 6.0, 7.5, 9.0, 9.0, 9.0, 9.0,
                       7.5, 6.0, 6.0, 6.0, 7.5, 9.0, 9.0, 7.5)
+#: Speech-environment response curve (Mac systemeq EXTERNAL_VOICE_INTENT parity):
+#: whole spectrum +1 dB, 1-4 kHz +4 dB. Applied on the full spectrum like the demo
+#: baseline (not through the six-stem soft masks), so the level matches the Mac.
+SPEECH_RESPONSE_DB = (1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0,
+                      4.0, 4.0, 4.0, 4.0, 4.0, 4.0, 4.0, 4.0, 4.0,
+                      1.0, 1.0, 1.0, 1.0, 1.0, 1.0)
 WINDOW_SECONDS = MODEL_FRAMES * HOP / SAMPLE_RATE  # 4.005 s
 
 
@@ -893,6 +899,16 @@ class StreamingWindowManager:
                 dtype=np.float32)  # [1025]
             demo_gain = (10.0 ** (demo_bin / 20.0)).astype(np.float32)
         weights = weights * demo_gain[:, None]  # [1025,T]
+        # Speech environment response (Mac EVI parity): full-spectrum +1 dB and
+        # 1-4 kHz +4 dB applied directly (no six-stem mask dilution), stacked on
+        # the demo baseline — this is the "as obvious as the Mac" layer.
+        if self.env_state == "speech":
+            speech_bin = np.asarray(
+                self.tuner.band_map.gains_to_bins(
+                    np.asarray(SPEECH_RESPONSE_DB, dtype=np.float64)),
+                dtype=np.float32)
+            speech_gain = (10.0 ** (speech_bin / 20.0)).astype(np.float32)
+            weights = weights * speech_gain[:, None]
         if weights.shape != spectrum.shape[-2:]:
             raise WorkerError(f"envelope weights shape {weights.shape} != spectrum {spectrum.shape[-2:]}")
         remixed_spec = spectrum * weights.astype(np.complex64)
