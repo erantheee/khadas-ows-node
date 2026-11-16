@@ -24,7 +24,7 @@ sleep 1.5
     --mode npu --model artifacts/rk-fused.rknn --window-frames 345 \
     --output-gain unity --output-mode envelope --policy roles \
     --listening-mode auto --env-decision on \
-    --attack-ms 800 --release-ms 2000 --gate-floor-db -100 --gate-full-db -90 \
+    --attack-ms 300 --release-ms 2000 --gate-floor-db -100 --gate-full-db -90 \
     --evidence-file /tmp/dmic-latest.json \
     --node-status-url http://127.0.0.1:8787/v1/status \
     --eq-depth 1.3 --masking-dose 1.0 --max-positive-db 3.0 \
