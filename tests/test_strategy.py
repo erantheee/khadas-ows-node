@@ -177,6 +177,7 @@ def test_environment_from_evidence_priority():
     assert strategy.environment_from_evidence({"environment": "VOICE"}) == "speech"
     assert strategy.environment_from_evidence({"event": "wind", "environment": "NOISY"}) == "wind"
     assert strategy.environment_from_evidence({"event": "keyboard"}) == "keyboard"
+    assert strategy.environment_from_evidence({"event": "knock"}) == "keyboard"
     assert strategy.environment_from_evidence({"context": "babble", "environment": "LOUD"}) == "babble"
     assert strategy.environment_from_evidence({"context": "horn"}) == "office"
     assert strategy.environment_from_evidence({"environment": "LOUD"}) == "office"
@@ -206,3 +207,33 @@ def test_apply_environment_is_attenuation_only():
     assert all(street[stem] <= music[stem] for stem in strategy.STEMMS6)
     deep = strategy.apply_environment({stem: -8.0 for stem in strategy.STEMMS6}, "speech")
     assert min(deep.values()) == strategy.ENV_TARGET_FLOOR_DB
+
+
+def test_noise_exposure_maps_level_and_fails_open():
+    assert strategy.noise_exposure(None) == 1.0
+    assert strategy.noise_exposure("not-a-number") == 1.0
+    assert strategy.noise_exposure(strategy.NOISE_FLOOR_DBFS) == 0.0
+    assert strategy.noise_exposure(strategy.NOISE_CEIL_DBFS) == 1.0
+    assert strategy.noise_exposure(
+        (strategy.NOISE_FLOOR_DBFS + strategy.NOISE_CEIL_DBFS) / 2.0) == pytest.approx(0.5)
+    assert strategy.noise_exposure(-20.0) == 1.0  # above ceiling clamps to 1
+    assert strategy.noise_exposure(-80.0) == 0.0  # below floor clamps to 0
+
+
+def test_apply_environment_gear_and_noise_scaling():
+    music = strategy.BOOST_PROFILE
+    base = strategy.apply_environment(music, "street")
+    aggressive = strategy.apply_environment(music, "street", env_scale=1.6)
+    # aggressive scales the whole dynamic pull, not just one stem
+    assert aggressive["drums"] == pytest.approx(base["drums"] - 0.9)
+    assert aggressive["bass"] == pytest.approx(base["bass"] - 1.2)
+    # noise_scale halves the noise-driven pull above the base fraction
+    half = strategy.apply_environment(music, "street", env_scale=1.0, noise_scale=0.5)
+    assert half["drums"] == pytest.approx(music["drums"] - 1.275)  # base 0.7 + 0.5*0.3
+    # speech is intent-driven: noise_scale must not touch it
+    speech = strategy.apply_environment(music, "speech", env_scale=1.0, noise_scale=0.0)
+    assert speech["drums"] == pytest.approx(music["drums"] - 1.5)
+    # floor scales with env_scale so aggressive keeps proportionality
+    deep = strategy.apply_environment({stem: -16.0 for stem in strategy.STEMMS6},
+                                      "street", env_scale=2.0)
+    assert min(deep.values()) == strategy.ENV_TARGET_FLOOR_DB * 2.0

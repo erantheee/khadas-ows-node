@@ -62,6 +62,10 @@ STEMS = 4  # legacy four-stem layout; six-stem RK models report 6
 _SIX_STEMS = ("vocals", "drums", "bass", "guitar", "piano", "other")
 #: 面板档位控制（node POST /v1/tuning 写入）：/tmp/tuning-control.json
 TUNING_CONTROL_PATH = "/tmp/tuning-control.json"
+#: 2026-11-16 用户语义修正 v4：包络动态响应放大（噪音越大拉得越狠）基础/激进两档共用
+#: ×3.0；两档的区别回到静态 demo 曲线（基础 ±1.3 / 激进 2-8k 抬升，demo 演示口径，
+#: 用户拍板：激进那版的毛躁/底噪 demo 可接受）。
+AGGRESSIVE_ENV_SCALE = 3.0
 #: Demo 基线两档（Mac systemeq.swift 同款，直接加在最终增益上、不乘深度）：
 #: basic = ±1.3 dB 轻量 Harman 形态；aggressive = "demo 要明显" ×2 版（中高频 +5~6 dB）。
 #: 面板档位经 depth/dose 热加载区分（dose<=0.6 关档无基线）。
@@ -713,11 +717,36 @@ class StreamingWindowManager:
             "max_positive_db": self.tuner.max_positive_db,
         }
 
+    def _update_environment(self) -> None:
+        """10 Hz environment decision from the DMIC evidence stream.
+
+        Historically ran once per 4 s envelope window, so short speech bursts
+        were missed (fast_windows needed two whole windows). Runs on the
+        control loop now: speech enters within ~200 ms of evidence frames.
+        """
+        evidence = self.tuner.evidence.read() or {}
+        env_source = (role_strategy.environment_from_evidence(evidence)
+                      if self.env_decision == "on" else "unknown")
+        # Own-playback guard: while the board is playing media, the DMIC hears the open-ear
+        # leakage, so content-like environment states (speech/babble/street/office) demote to
+        # quiet (fail-open); physical states (wind/keyboard) stay.
+        if self._last_input_rms_db > self.MEDIA_LEVEL_DB:
+            self._media_hold = min(self._media_hold + 1, 4)
+        else:
+            self._media_hold = max(self._media_hold - 1, 0)
+        self.media_active = self._media_hold >= 2
+        if (self.media_active and self.env_media_guard == "on"
+                and env_source not in ("quiet", "wind", "keyboard")):
+            env_source = "unknown"
+        self.env_state = self.env_tracker.update(env_source)
+        self.env_source = self.env_tracker.source
+
     def _control_loop(self) -> None:
         """10 Hz: DMIC evidence + latest content features -> tuner -> telemetry."""
         while True:
             try:
                 self._apply_tuning_control()
+                self._update_environment()
                 with self._features_lock:
                     features = self.latest_features
                 if features is not None:
@@ -835,37 +864,25 @@ class StreamingWindowManager:
             content = (explicit if explicit in self.content_profiles
                        else self._detect_content(spectrum))
             engaged = self._conversation_active(evidence)
-        # 2a) environment decision (quiet/speech/babble/street/office/wind/keyboard) from
-        # the board DMIC evidence, with hysteresis and fail-open to quiet. It shapes
-        # contrast only: duck already attenuates, so the environment layer never stacks on
-        # top of it (that would double-count and flatten the mix).
-        env_source = (role_strategy.environment_from_evidence(evidence)
-                      if self.env_decision == "on" else "unknown")
-        # Own-playback guard: while the board is playing media, the DMIC hears the open-ear
-        # leakage, so content-like environment states (speech/babble/street/office) demote to
-        # quiet (fail-open); physical states (wind/keyboard) stay. The Mac conversation gate
-        # still ducks through mode=duck.
-        if self._last_input_rms_db > self.MEDIA_LEVEL_DB:
-            self._media_hold = min(self._media_hold + 1, 4)
-        else:
-            self._media_hold = max(self._media_hold - 1, 0)
-        self.media_active = self._media_hold >= 2
-        if (self.media_active and self.env_media_guard == "on"
-                and env_source not in ("quiet", "wind", "keyboard")):
-            env_source = "unknown"
-        self.env_state = self.env_tracker.update(env_source)
-        self.env_source = self.env_tracker.source
-        if engaged:
-            profile = dict(self.duck_profile)
-        else:
-            profile = role_strategy.apply_environment(
-                self.content_profiles.get(content, self.boost_profile), self.env_state)
-        target = {stem: float(profile.get(stem, 0.0)) for stem in exec_stems}
-        # 2a') panel gear: 档位只切换 demo 基线（Mac systemeq 语义，见下方 weights）。
-        # 六轨环境包络保持原值——之前档位乘数(panel_scale)放大了六轨高频压制，
-        # 与 demo 基线的高频抬升对冲，两档听感差被抵消。
+        # Environment state is updated by the 10 Hz control loop for fast speech
+        # entry; refresh once per window too so the window path stays self-contained
+        # (idempotent tracker, keeps window-level tests deterministic).
+        self._update_environment()
+        # 面板档位语义（2026-11-16 用户修正）：关=dose<=0.6 完全直通（内容 profile 也归零）；
+        # 激进=包络动态响应 ×1.6（噪音越大拉得越狠），不是静态曲线抬升。
         panel_dose = float(getattr(self.tuner, "masking_dose", 1.0) or 1.0)
         panel_depth = float(getattr(self.tuner, "depth", 1.3) or 1.3)
+        env_scale = 0.0 if panel_dose <= 0.6 else AGGRESSIVE_ENV_SCALE
+        if env_scale <= 0.0:
+            profile = {stem: 0.0 for stem in role_strategy.STEMMS6}
+        elif engaged:
+            profile = dict(self.duck_profile)
+        else:
+            noise_scale = role_strategy.noise_exposure(evidence.get("level_dbfs"))
+            profile = role_strategy.apply_environment(
+                self.content_profiles.get(content, self.boost_profile),
+                self.env_state, env_scale=env_scale, noise_scale=noise_scale)
+        target = {stem: float(profile.get(stem, 0.0)) for stem in exec_stems}
         # 2b) low-level gate: scale the target by how far the frame sits below the window peak.
         # Quiet frames fade the processing to bypass, so the time-varying spectral gain does
         # not add its modulation texture to silent passages (measured -13 dB residual there).
@@ -893,6 +910,8 @@ class StreamingWindowManager:
         if panel_dose <= 0.6:
             demo_gain = np.ones(FREQ_BINS, dtype=np.float32)
         else:
+            # 2026-11-16 demo 口径（用户拍板）：激进档叠回静态 2-8k 抬升（该版有毛躁/底噪，
+            # demo 演示可接受）；基础档只留 ±1.3 轻曲线。包络两档同强度（×3.0）。
             demo_db = DEMO_AGGRESSIVE_DB if panel_depth >= 1.5 else DEMO_BASIC_DB
             demo_bin = np.asarray(
                 self.tuner.band_map.gains_to_bins(np.asarray(demo_db, dtype=np.float64)),

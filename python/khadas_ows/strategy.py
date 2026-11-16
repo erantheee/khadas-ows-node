@@ -107,6 +107,35 @@ ENV_MODIFIERS: dict[str, dict[str, float]] = {
 }
 #: Floor for the composed target so one bad classification cannot mute a stem.
 ENV_TARGET_FLOOR_DB = -9.0
+#: Environment states driven by ambient NOISE (level-proportional response).
+#: `speech` is intent-driven (a talker is present) and stays level-independent;
+#: `quiet` has no modifiers.
+NOISE_ENVS = ("babble", "street", "office", "wind", "keyboard")
+#: DMIC level mapping for the continuous noise response. 2026-11-16 recalibration v3
+#: against MEASURED board levels: quiet room ~-64, close-range blowing ~-54
+#: (dmic.log impulse lines), so the usable span is roughly -66..-46 dBFS.
+NOISE_FLOOR_DBFS = -66.0
+NOISE_CEIL_DBFS = -46.0
+#: A labelled noise state always pulls at least this fraction of its table (the
+#: rest scales with the level). Prevents "aggressive cannot pull at all" when the
+#: listening model says noise but the level reads quiet-room low.
+NOISE_BASE_FACTOR = 0.7
+
+
+def noise_exposure(level_dbfs: float | None) -> float:
+    """0..1 continuous ambient-noise strength from the DMIC level.
+
+    Missing/None level fails open to 1.0 (full labelled-state strength), so an
+    evidence-schema change can never silently mute the environment layer.
+    """
+    if level_dbfs is None:
+        return 1.0
+    try:
+        value = float(level_dbfs)
+    except (TypeError, ValueError):
+        return 1.0
+    span = NOISE_CEIL_DBFS - NOISE_FLOOR_DBFS
+    return float(min(1.0, max(0.0, (value - NOISE_FLOOR_DBFS) / span)))
 
 
 def environment_from_evidence(evidence: dict | None) -> str:
@@ -129,6 +158,12 @@ def environment_from_evidence(evidence: dict | None) -> str:
     if event == "wind" or context == "wind":
         return "wind"
     if event == "keyboard":
+        return "keyboard"
+    if event == "knock":
+        # Impulsive DMIC noise (knocks, air puffs hitting the mic): the listening
+        # model's impulse detector fires on it and the level rises, but the context
+        # classifier keeps the room's broadband label. Treat it as the keyboard-class
+        # impulsive-noise state so the envelope actually responds.
         return "keyboard"
     if context == "babble":
         return "babble"
@@ -184,13 +219,31 @@ class EnvironmentTracker:
         return self.state
 
 
-def apply_environment(profile: dict[str, float], env: str) -> dict[str, float]:
-    """Compose a six-stem profile with the environment contrast (attenuation only)."""
+def apply_environment(profile: dict[str, float], env: str,
+                      env_scale: float = 1.0, noise_scale: float = 1.0) -> dict[str, float]:
+    """Compose a six-stem profile with the environment contrast (attenuation only).
+
+    ``env_scale`` is the panel gear (basic 1.0 / aggressive ~2.5): it scales the
+    dynamic envelope response, NOT a static curve. ``noise_scale`` is the continuous
+    DMIC-level strength (0..1); noise-driven states always keep a base fraction
+    (``NOISE_BASE_FACTOR``) so a labelled state can never read as zero. Speech is
+    intent-driven and stays fixed regardless of gear or level. The floor scales with
+    ``env_scale`` so aggressive keeps the same proportionality instead of saturating
+    at a fixed floor.
+    """
     state = env if env in ENVIRONMENTS else "quiet"
     modifier = ENV_MODIFIERS[state]
+    if state in NOISE_ENVS:
+        factor = NOISE_BASE_FACTOR + (1.0 - NOISE_BASE_FACTOR) * float(noise_scale)
+        scale = float(env_scale) * factor
+    elif state == "speech":
+        scale = 1.0  # intent-driven: fixed response, never gear/noise-scaled
+    else:
+        scale = float(env_scale)
+    floor_db = ENV_TARGET_FLOOR_DB * float(env_scale)
     return {
-        stem: max(ENV_TARGET_FLOOR_DB,
-                  min(1.5, float(profile.get(stem, 0.0)) + float(modifier.get(stem, 0.0))))
+        stem: max(floor_db,
+                  min(1.5, float(profile.get(stem, 0.0)) + float(modifier.get(stem, 0.0)) * scale))
         for stem in STEMMS6
     }
 

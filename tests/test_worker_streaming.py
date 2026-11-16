@@ -247,6 +247,46 @@ def test_environment_fails_open_when_evidence_is_stale(tmp_path):
     assert entry["mode"] == "boost"
 
 
+def _wait_for_tuning(manager, depth, timeout_s=3.0):
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        if float(getattr(manager.tuner, "depth", 0.0)) == float(depth):
+            return
+        time.sleep(0.05)
+    raise AssertionError(f"tuner depth never reached {depth}")
+
+
+def test_both_gears_share_envelope_strength_and_off_bypasses(tmp_path, monkeypatch):
+    """2026-11-16 v4 gear semantics (user decision): basic and aggressive share the same
+    dynamic envelope strength (x3.0); the gears differ only in the static demo curve
+    (not visible in target_gain_db). Off (dose<=0.6) is a true bypass."""
+    evidence = tmp_path / "evidence.json"
+    _write_evidence(evidence, {"context": "street", "environment": "NOISY",
+                               "event": "quiet", "level_dbfs": -40.0,
+                               "band_dbfs": [0.0] * 24})
+    packet = sine_packet(1.0, amplitude=0.0005)
+
+    def run(depth, dose):
+        tuning = tmp_path / f"tuning-{depth}-{dose}.json"
+        tuning.write_text(json.dumps({"depth": depth, "masking_dose": dose,
+                                      "max_positive_db": 4.0}), encoding="utf-8")
+        monkeypatch.setattr(W, "TUNING_CONTROL_PATH", str(tuning))
+        manager = W.StreamingWindowManager(
+            W.StubBackend(), output_mode="envelope", policy="roles",
+            evidence_file=str(evidence), env_decision="on")
+        manager.process(packet, CHANNELS)          # starts the 10 Hz hot-load loop
+        _wait_for_tuning(manager, depth)
+        manager.process(packet, CHANNELS)          # envelope computed with hot-loaded gear
+        return manager.role_history[-1]["target_gain_db"]
+
+    basic = run(1.3, 1.0)
+    aggressive = run(2.5, 1.4)
+    off = run(1.0, 0.5)
+    assert aggressive == basic          # same envelope strength on both gears
+    assert aggressive["drums"] < -3.0   # street at full noise: drums pulled hard
+    assert off == {"vocals": 0.0, "drums": 0.0, "bass": 0.0, "other": 0.0}
+
+
 def test_board_speech_evidence_masks_instead_of_ducking(tmp_path):
     """2026-11-10 decision: board speech feeds contrast, the Mac owns ducking."""
     evidence = tmp_path / "evidence.json"
