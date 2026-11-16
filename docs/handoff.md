@@ -1,5 +1,17 @@
 # Handoff — khadas-ows-node (2026-11-06)
 
+## 2026-11-16 — phone→Edge2→Bluetooth headset latency tuning
+
+- Live chain was still using 1000 ms packets, one-packet pre-roll and a requested 1200 ms
+  playback buffer. The sink is `ANKER AeroClip 2` over SBC, so this is a two-A2DP path.
+- Trial 1 (`window/preroll/capture/playback = 500 ms/1/50 ms/300 ms`) ran 69 packets in
+  39 s with NPU RTT 107–150 ms, RTF 0.21–0.30, zero relay underruns and no new fallbacks.
+- Trial 2 (`500/1/30/200`) ran 59 packets in 30 s with NPU RTT 110–133 ms, zero relay
+  underruns and no new fallbacks. It remains the live configuration (PID/log are runtime
+  details; inspect rather than trusting this snapshot).
+- Relay defaults were changed to the second setting. Automated telemetry proves continuity,
+  not acoustic latency or listening acceptance; the user still needs to judge delay/dropouts.
+
 > 2026-11-09 availability recheck: `khadas.local` resolved to `172.16.20.18`; SSH and
 > the existing FP16 NPU services were healthy. A fresh 20-second network stream passed
 > 5/5 chunks with zero fallbacks/reconnects/deadline misses and `actual_mode=npu`.

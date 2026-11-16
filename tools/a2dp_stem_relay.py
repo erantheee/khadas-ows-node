@@ -27,8 +27,8 @@ null sink the default sink, so every new received A2DP stream is linked there
 What this is and is not:
   * it is an integration probe: proves the phone->board->NPU->earphone path and
     reports node status (actual_mode / RTF / fallbacks) and relay (RTF, underruns);
-  * it is not a product latency claim: add ~1 s capture window + NPU RTT + pre-roll
-    on top of the ~0.4 s A2DP leg (typical measured total here is 2.5-4 s);
+  * it is not a product latency claim: the default 500 ms capture window, NPU RTT and
+    one-window pre-roll sit on top of two A2DP legs; measure the acoustic result;
   * a route guard polls every second and moves any received A2DP stream back onto the
     silent sink (WirePlumber stream-restore can otherwise re-link it to the earphone);
   * the C++ node serves one audio client at a time. While the relay runs, the
@@ -38,7 +38,7 @@ Usage (board, after tools/a2dp_sink_setup.sh and tools/a2dp_sink_usb_output.sh):
 
     ~/khadas-ows-node/.venv/bin/python tools/a2dp_stem_relay.py
     # optional: --record /tmp/processed.wav --stats-json /tmp/relay.json
-    #           --preroll 1 (lower latency, more underrun risk)
+    #           --preroll 2 (more jitter margin, higher latency)
     #           --duration 60   (stop after 60 s)
 
 Exit code 0 = ran and cleaned up; 2 = precondition failure (node/worker/pactl).
@@ -478,10 +478,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--node-host", default="127.0.0.1")
     parser.add_argument("--node-port", type=int, default=9100)
     parser.add_argument("--http-port", type=int, default=8787)
-    parser.add_argument("--window-ms", type=int, default=1000,
-                        help="pipe packet length; 1000 ms keeps ~1 NPU window per packet")
-    parser.add_argument("--preroll", type=int, default=2,
-                        help="processed chunks queued before playback starts (default 2)")
+    parser.add_argument("--window-ms", type=int, default=500,
+                        help="pipe packet length; 500 ms matches the deployed T44 model")
+    parser.add_argument("--preroll", type=int, default=1,
+                        help="processed chunks queued before playback starts (default 1)")
     parser.add_argument("--preroll-timeout", type=float, default=30.0)
     parser.add_argument("--start-timeout", type=float, default=15.0,
                         help="seconds to wait for non-silent source audio before moving "
@@ -502,8 +502,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--pipewire-source", metavar="NODE",
                         help="capture this PipeWire output node directly with pw-record; "
                              "the phone stream is still moved to the silent sink")
-    parser.add_argument("--capture-latency-ms", type=int, default=100)
-    parser.add_argument("--playback-latency-ms", type=int, default=1200)
+    parser.add_argument("--capture-latency-ms", type=int, default=30)
+    parser.add_argument("--playback-latency-ms", type=int, default=200)
     parser.add_argument("--record", metavar="PATH", help="also write the processed stream to a float32 WAV")
     parser.add_argument("--stats-json", metavar="PATH")
     parser.add_argument("--duration", type=float, help="stop after N seconds")

@@ -38,3 +38,15 @@ The numeric suffixes are assigned by BlueZ/PipeWire and must be checked with
 - The current path has seconds of latency and is a prototype, not a product latency result.
 - Generic BlueZ auto-connect can select the headset's wrong role; explicit Profile UUIDs
   are required. HFP/HSP are disabled in the supplied WirePlumber drop-in.
+
+## Low-latency relay settings (2026-11-16)
+
+- The deployed T44 model accepts a 500 ms relay packet. With one packet of pre-roll,
+  30 ms capture latency and 200 ms requested playback latency, a live 30 s observation
+  processed 59 packets with 110–133 ms representative NPU round trips, zero relay
+  underruns and no new node fallbacks.
+- The preceding 500/1/50/300 ms trial was also stable for 69 packets. These observations
+  validate software continuity only; they are not an acoustic end-to-end latency or
+  listening-quality acceptance result.
+- Defaults in `tools/a2dp_stem_relay.py` now use 500/1/30/200 ms. Increase playback
+  latency first, then pre-roll, if a different headset or RF environment causes dropouts.
