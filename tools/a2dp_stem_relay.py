@@ -56,6 +56,10 @@ import subprocess
 import sys
 import threading
 import time
+
+import numpy as np
+
+from drum_fast_eq import DrumEnhancer
 import urllib.request
 from pathlib import Path
 
@@ -381,7 +385,8 @@ def _recv_exact(sock: socket.socket, size: int) -> bytes | None:
 
 def player_loop(args: argparse.Namespace, out_q: queue.Queue, pacat: subprocess.Popen,
                 writer: "Float32WavWriter | None", stats: dict,
-                stats_lock: threading.Lock, stop: threading.Event) -> None:
+                stats_lock: threading.Lock, drum_eq: "DrumEnhancer | None",
+                stop: threading.Event) -> None:
     chunk_frames = int(round(SAMPLE_RATE * args.window_ms / 1000.0))
     chunk_bytes = chunk_frames * BYTES_PER_FRAME
     subs = max(1, int(args.window_ms // 50))          # 50 ms sub-writes keep the server buffer small
@@ -413,6 +418,10 @@ def player_loop(args: argparse.Namespace, out_q: queue.Queue, pacat: subprocess.
         view = memoryview(processed)
         for index in range(subs):
             part = view[index * sub_bytes:(index + 1) * sub_bytes]
+            if drum_eq is not None:
+                arr = np.frombuffer(part, dtype="<f4")
+                arr = drum_eq.process_block(arr)
+                part = arr.tobytes()
             try:
                 pacat.stdin.write(part)
                 pacat.stdin.flush()
@@ -427,6 +436,8 @@ def player_loop(args: argparse.Namespace, out_q: queue.Queue, pacat: subprocess.
                 next_tick = time.monotonic()      # fell behind: re-anchor instead of bursting
         with stats_lock:
             stats["played_seconds"] = (chunk_index + 1) * args.window_ms / 1000.0
+            if drum_eq is not None:
+                stats["drum_events"] = drum_eq.events
         chunk_index += 1
 
 
@@ -448,7 +459,8 @@ def status_loop(args: argparse.Namespace, stats: dict, stats_lock: threading.Loc
                   f"rtf={stats.get('rtf', 0):.2f} underruns={stats.get('underruns', 0)} "
                   f"node={status.get('actual_mode')} node_rtf={status.get('last_rtf', 0):.2f} "
                   f"fallbacks={status.get('fallbacks')} audio_s={stats.get('captured_audio_seconds', 0):.0f} "
-                  f"a2dp_moves={stats.get('a2dp_moves', 0)}", flush=True)
+                  f"a2dp_moves={stats.get('a2dp_moves', 0)} "
+                  f"drum_events={stats.get('drum_events', 0)}", flush=True)
         except Exception:  # noqa: BLE001 - status is best-effort telemetry
             pass
         stop.wait(args.status_interval)
@@ -479,6 +491,10 @@ def main(argv: list[str] | None = None) -> int:
                              "long (node restart / dead socket)")
     parser.add_argument("--node-timeout", type=float, default=10.0)
     parser.add_argument("--sink", help="playback sink name (default: first USB sink)")
+    parser.add_argument("--drum-eq-db", type=float, default=2.0,
+                        help="fast kick-transient EQ on the playback path: low punch "
+                             "boost in dB (default 2.0; 0 disables). Vocals/keys/"
+                             "cymbals/MIDI/bass stay on the six-stem envelope.")
     parser.add_argument("--null-sink", default="a2dp_stem_in",
                         help="silent capture sink made default during the relay")
     parser.add_argument("--external-source", metavar="MONITOR",
@@ -610,6 +626,8 @@ def _run_session(args: argparse.Namespace, stats: dict, stats_lock: threading.Lo
              f"--latency-msec={args.playback_latency_ms}"],
             stdin=subprocess.PIPE, stderr=subprocess.DEVNULL)
 
+        drum_eq = DrumEnhancer(boost_db=args.drum_eq_db, cut_db=-1.5) \
+            if args.drum_eq_db > 0 else None
         threads = [
             threading.Thread(target=reader_loop,
                              args=(capture, in_q, chunk_bytes, stats, stats_lock, stop),
@@ -617,7 +635,8 @@ def _run_session(args: argparse.Namespace, stats: dict, stats_lock: threading.Lo
             threading.Thread(target=processor_loop,
                              args=(args, in_q, out_q, stats, stats_lock, stop), daemon=True),
             threading.Thread(target=player_loop,
-                             args=(args, out_q, player, writer, stats, stats_lock, stop),
+                             args=(args, out_q, player, writer, stats, stats_lock,
+                                   drum_eq, stop),
                              daemon=True),
             *( [] if args.pipewire_source else [
                 threading.Thread(target=route_guard_loop,
